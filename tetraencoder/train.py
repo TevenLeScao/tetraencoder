@@ -34,7 +34,7 @@ if __name__ == "__main__":
     print(args)
 
     # build model
-    model = SentenceTransformer(args.model_name)
+    model = SentenceTransformer(args.model_name, add_pooling_layer=False)
     model.max_seq_length = args.max_seq_length
 
     # build datasets
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     model.fit(train_objectives=[(dataloader, train_loss) for dataloader in dataloaders.values()],
               epochs=args.num_epochs,
               warmup_steps=args.warmup_steps,
-              use_amp=True,
+              use_amp=False,
               checkpoint_path=model_save_path,
               checkpoint_save_steps=args.checkpoint_save_steps,
               optimizer_params={'lr': args.lr},
