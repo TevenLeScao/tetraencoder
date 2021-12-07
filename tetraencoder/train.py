@@ -12,7 +12,8 @@ from torch.utils.data import DataLoader
 
 from dataset_builders import *
 
-dataset_builders = {"msmarco": MsMarcoDataset, "kelm": KelmDataset, "gooaq": GooAqDataset, "tekgen": TekgenDataset}
+dataset_builders = {"msmarco": MsMarcoDataset, "kelm": KelmDataset, "gooaq": GooAqDataset, "tekgen": TekgenDataset,
+                    "trex": TRexDataset}
 
 if __name__ == "__main__":
 
@@ -39,9 +40,12 @@ if __name__ == "__main__":
     for dataset_name in dataset_builders:
         parser.add_argument(f"--{dataset_name}_file", default=None, type=str)
     # evaluation dataset args
-    parser.add_argument(f"--eval_webnlg_wikidata_file", default=None, type=str)
-    parser.add_argument(f"--eval_gooaq_file", default=None, type=str)
-    parser.add_argument(f"--eval_sq_file", default=None, type=str)
+    parser.add_argument("--eval_webnlg_wikidata_file", default=None, type=str)
+    parser.add_argument("--eval_gooaq_file", default=None, type=str)
+    parser.add_argument("--eval_sq_file", default=None, type=str)
+    parser.add_argument("--wandb", action="store_true")
+    parser.add_argument("--run_name", default=None, type=str)
+    parser.add_argument("--logging_steps", default=100, type=int)
     # wrap-up
     args = parser.parse_args()
     print(args)
@@ -53,23 +57,27 @@ if __name__ == "__main__":
     word_embedding_model.tokenizer.add_tokens(SPECIAL_TOKENS, special_tokens=True)
     word_embedding_model.auto_model.resize_token_embeddings(len(word_embedding_model.tokenizer))
     train_loss = losses.MultipleNegativesRankingLoss(model=model)
-    model_save_path = os.path.join(args.output_dir, f'train_bi-encoder-mnrl-{args.model_name.replace("/", "-")}-'
-                                                    f'{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}')
+
+    train_datasets = [dataset_name for dataset_name in dataset_builders if
+                      vars(args)[f"{dataset_name}_file"] is not None]
+    name = args.run_name if args.run_name is not None else \
+        f"{args.model_name.replace('/', '-')}_{'_'.join(train_datasets)}"
+
+    model_save_path = os.path.join(args.output_dir, f'{name}-{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}')
 
     # Build datasets
     source_data = {}
     dataloaders = {}
     eval_dataloaders = {}
-    for dataset_name in dataset_builders:
+    for dataset_name in train_datasets:
         start_time = time()
         # for training
         input_filepath = vars(args)[f"{dataset_name}_file"]
-        if input_filepath is not None:
-            print(f"adding {dataset_name} to the corpus")
-            dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath)
-            dataloaders[dataset_name] = DataLoader(dataloaders[dataset_name], shuffle=False,
-                                                   batch_size=args.train_batch_size_per_gpu)
-            print(f"added {dataset_name} to the corpus in {time() - start_time:.3f}s")
+        print(f"adding {dataset_name} to the corpus")
+        dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath)
+        dataloaders[dataset_name] = DataLoader(dataloaders[dataset_name], shuffle=False,
+                                               batch_size=args.train_batch_size_per_gpu)
+        print(f"added {dataset_name} to the corpus in {time() - start_time:.3f}s")
 
     # Create evaluators
     evaluators = []
@@ -77,17 +85,17 @@ if __name__ == "__main__":
         eval_webnlg_dataset = WebNlgWikidataDataset(args.eval_webnlg_wikidata_file)
         evaluators.append(
             TranslationEvaluator(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(), show_progress_bar=False,
-                                 batch_size=32))
+                                 batch_size=args.train_batch_size_per_gpu))
     if args.eval_gooaq_file is not None:
         eval_gooaq_dataset = GooAqDataset(args.eval_gooaq_file)
         evaluators.append(
             TranslationEvaluator(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(), show_progress_bar=False,
-                                 batch_size=32))
+                                 batch_size=args.train_batch_size_per_gpu))
     if args.eval_sq_file is not None:
         eval_sq_dataset = SQDataset(args.eval_sq_file)
         evaluators.append(
             TranslationEvaluator(eval_sq_dataset.rdfs(), eval_sq_dataset.questions(), show_progress_bar=False,
-                                 batch_size=32))
+                                 batch_size=args.train_batch_size_per_gpu))
     if len(evaluators) == 0:
         evaluator = None
     else:
@@ -95,6 +103,30 @@ if __name__ == "__main__":
 
     os.makedirs(model_save_path, exist_ok=True)
     # evaluator(model, epoch=0, steps=0, output_path=model_save_path)
+
+    if args.wandb:
+
+        import wandb
+        wandb.init(project="rdf-embeddings", entity="flukeellington", name=name)
+        wandb.config = {
+            "model_name": args.model_name,
+            "epochs": args.num_epochs,
+            "learning_rate": args.lr,
+            "warmup_steps": args.warmup_steps,
+            "batch_size": args.train_batch_size_per_gpu * torch.cuda.device_count(),
+            "max_seq_length": args.max_seq_length,
+            "train_datasets": train_datasets
+        }
+
+        def train_callback(score, epoch, steps):
+            wandb.log({"train_loss": score, "training_steps": steps})
+
+        def eval_callback(score, epoch, steps):
+            wandb.log({"eval_score": score, "training_steps": steps})
+
+    else:
+        train_callback = None
+        eval_callback = None
 
     # Train the model
     model.fit(train_objectives=[(dataloader, train_loss) for dataloader in dataloaders.values()],
@@ -108,7 +140,10 @@ if __name__ == "__main__":
               output_path=model_save_path,
               checkpoint_save_steps=args.checkpoint_save_steps,
               optimizer_params={'lr': args.lr},
-              gradient_accumulation=args.gradient_accumulation
+              gradient_accumulation=args.gradient_accumulation,
+              logging_steps=args.logging_steps,
+              train_callback=train_callback,
+              eval_callback=eval_callback
               )
 
     # Save the model

@@ -10,12 +10,13 @@ from sentence_transformers import SentenceTransformer
 from dataset_builders import GenWikiDataset, TRexDataset
 
 
-def embed_pairs(examples, rank, model, text_key, rdf_key, batch_size):
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(rank % torch.cuda.device_count())
+def embed_pairs(examples: dict, rank: int, model: SentenceTransformer, text_key: str, rdf_key: str, batch_size: int):
+    device = f"cuda:{rank % torch.cuda.device_count()}"
+    model = model.to(device)
     embeddings1 = torch.stack(
-        model.encode(examples[text_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size))
+        model.encode(examples[text_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size, device=device))
     embeddings2 = torch.stack(
-        model.encode(examples[rdf_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size))
+        model.encode(examples[rdf_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size, device=device))
 
     cos_sims = F.cosine_similarity(embeddings1, embeddings2).detach().cpu().numpy()
     examples["similarity"] = cos_sims
@@ -49,10 +50,10 @@ if __name__ == "__main__":
         raise NotImplementedError("you must pass a dataset!")
     if args.subset:
         out_path = out_path + f".subset{args.subset}"
-        dataset.shuffle(seed=1066)
-        dataset.select(range(args.subset))
+        dataset = dataset.shuffle(seed=1066)
+        dataset = dataset.select(range(args.subset))
     set_start_method("spawn")
-    dataset.map(
+    dataset = dataset.map(
         partial(embed_pairs, model=model, text_key=text_key, rdf_key=rdf_key, batch_size=args.batch_size),
         batched=True, batch_size=args.batch_size, with_rank=True, num_proc=2)
     dataset.to_json(out_path)
