@@ -1,13 +1,15 @@
 import argparse
 import os.path
+import random
 from datetime import datetime
 from time import time
-import random
-import numpy as np
 
+import numpy as np
 import torch
+from accelerate import DistributedDataParallelKwargs, Accelerator
 from sentence_transformers import SentenceTransformer, losses
 from sentence_transformers.evaluation import TranslationEvaluator, SequentialEvaluator
+from translation_evaluator_with_recall import TranslationEvaluatorWithRecall
 from torch.utils.data import DataLoader
 
 from dataset_builders import *
@@ -50,6 +52,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(args)
 
+    kwargs = DistributedDataParallelKwargs(dim=0, broadcast_buffers=True, bucket_cap_mb=25,
+                                           find_unused_parameters=True, check_reduction=False,
+                                           gradient_as_bucket_view=False)
+    accelerator = Accelerator(kwargs_handlers=[kwargs])
+
     # Build model
     model = SentenceTransformer(args.model_name, add_pooling_layer=False)
     model.max_seq_length = args.max_seq_length
@@ -84,17 +91,18 @@ if __name__ == "__main__":
     if args.eval_webnlg_wikidata_file is not None:
         eval_webnlg_dataset = WebNlgWikidataDataset(args.eval_webnlg_wikidata_file)
         evaluators.append(
-            TranslationEvaluator(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(), show_progress_bar=False,
+            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(), show_progress_bar=False,
                                  batch_size=args.train_batch_size_per_gpu))
     if args.eval_gooaq_file is not None:
         eval_gooaq_dataset = GooAqDataset(args.eval_gooaq_file)
         evaluators.append(
-            TranslationEvaluator(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(), show_progress_bar=False,
+            TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(), show_progress_bar=False,
                                  batch_size=args.train_batch_size_per_gpu))
     if args.eval_sq_file is not None:
         eval_sq_dataset = SQDataset(args.eval_sq_file)
+        eval_sq_dataset.select(range(1000))
         evaluators.append(
-            TranslationEvaluator(eval_sq_dataset.rdfs(), eval_sq_dataset.questions(), show_progress_bar=False,
+            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(), eval_sq_dataset.questions(), show_progress_bar=False,
                                  batch_size=args.train_batch_size_per_gpu))
     if len(evaluators) == 0:
         evaluator = None
@@ -104,7 +112,7 @@ if __name__ == "__main__":
     os.makedirs(model_save_path, exist_ok=True)
     # evaluator(model, epoch=0, steps=0, output_path=model_save_path)
 
-    if args.wandb:
+    if args.wandb and accelerator.is_main_process:
 
         import wandb
         wandb.init(project="rdf-embeddings", entity="flukeellington", name=name)
@@ -121,8 +129,10 @@ if __name__ == "__main__":
         def train_callback(score, epoch, steps):
             wandb.log({"train_loss": score, "training_steps": steps})
 
-        def eval_callback(score, epoch, steps):
-            wandb.log({"eval_score": score, "training_steps": steps})
+        def eval_callback(scores, epoch, steps):
+            wandb.log({"WebNLG@1": scores[0]["recall@1_src2tgt"], "training_steps": steps})
+            wandb.log({"WebNLG@10": scores[0]["recall@10_src2tgt"], "training_steps": steps})
+            wandb.log({"MRR@10": scores[0]["mrr@10_src2tgt"], "training_steps": steps})
 
     else:
         train_callback = None
@@ -143,7 +153,9 @@ if __name__ == "__main__":
               gradient_accumulation=args.gradient_accumulation,
               logging_steps=args.logging_steps,
               train_callback=train_callback,
-              eval_callback=eval_callback
+              eval_callback=eval_callback,
+              accelerator=accelerator,
+              full_scores_callbacks=True
               )
 
     # Save the model

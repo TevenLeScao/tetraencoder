@@ -26,7 +26,7 @@ def batch_linearize_rdf(examples, rdf_key):
     return examples
 
 
-class InputExampleDataset():
+class InputExampleDataset:
 
     def __init__(self):
         self.dataset = None
@@ -39,6 +39,9 @@ class InputExampleDataset():
 
     def __getitem__(self, item):
         return NotImplementedError()
+
+    def __len__(self):
+        return len(self.dataset)
 
     def map(self, *args, **kwargs):
         self.dataset = self.dataset.map(*args, **kwargs)
