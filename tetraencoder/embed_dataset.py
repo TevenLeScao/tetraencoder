@@ -1,6 +1,5 @@
 import argparse
 from functools import partial
-import os
 from multiprocess import set_start_method
 
 import torch
