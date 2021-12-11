@@ -36,6 +36,7 @@ if __name__ == "__main__":
     parser.add_argument("--gradient_accumulation", default=1, type=int)
     parser.add_argument("--lr", default=2e-5, type=float)
     parser.add_argument("--checkpoint_save_steps", default=10000, type=int)
+    parser.add_argument("--hard_negatives", action="store_true")
     # i/o args
     parser.add_argument("--output_dir", default=".", type=str)
     # dataset args
@@ -45,6 +46,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_webnlg_wikidata_file", default=None, type=str)
     parser.add_argument("--eval_gooaq_file", default=None, type=str)
     parser.add_argument("--eval_sq_file", default=None, type=str)
+    # instrumentation
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run_name", default=None, type=str)
     parser.add_argument("--logging_steps", default=100, type=int)
@@ -82,6 +84,8 @@ if __name__ == "__main__":
         input_filepath = vars(args)[f"{dataset_name}_file"]
         print(f"adding {dataset_name} to the corpus")
         dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath)
+        if args.hard_negatives:
+            dataloaders[dataset_name].corruption = True
         dataloaders[dataset_name] = DataLoader(dataloaders[dataset_name], shuffle=False,
                                                batch_size=args.train_batch_size_per_gpu)
         print(f"added {dataset_name} to the corpus in {time() - start_time:.3f}s")

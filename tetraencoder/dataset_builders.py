@@ -31,8 +31,8 @@ def linearize_rdf(triples):
     return encoded_rdf
 
 
-def batch_linearize_rdf(examples, rdf_key):
-    examples["rdf_linearized"] = [linearize_rdf(rdf) for rdf in examples[rdf_key]]
+def batch_linearize_rdf(examples, rdf_key="triples", output_key="rdf_linearized"):
+    examples[output_key] = [linearize_rdf(rdf) for rdf in examples[rdf_key]]
     return examples
 
 
@@ -67,6 +67,7 @@ class InputExampleDataset:
 
     def __init__(self):
         self.dataset = None
+        self.corruption = False
 
     def __iter__(self):
         for index in range(len(self.dataset)):
@@ -111,7 +112,7 @@ class KelmDataset(InputExampleDataset):
         super().__init__()
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
+        self.map(batch_linearize_rdf, batched=True)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -119,7 +120,10 @@ class KelmDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        return InputExample(texts=[example["rdf_linearized"], example["gen_sentence"]])
+        if self.corruption:
+            return InputExample(texts=[example["gen_sentence"], example["rdf_linearized"], example["rdf_corrupted"]])
+        else:
+            return InputExample(texts=[example["gen_sentence"], example["rdf_linearized"]])
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -152,7 +156,7 @@ class TekgenDataset(InputExampleDataset):
         super().__init__()
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
+        self.map(batch_linearize_rdf, batched=True)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -160,7 +164,10 @@ class TekgenDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        return InputExample(texts=[example["rdf_linearized"], example["sentence"]])
+        if self.corruption:
+            return InputExample(texts=[example["sentence"], example["rdf_linearized"], example["rdf_corrupted"]])
+        else:
+            return InputExample(texts=[example["rdf_linearized"], example["sentence"]])
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -182,7 +189,10 @@ class WebNlgWikidataDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        return InputExample(texts=[example["rdf_linearized"], example["sentence"]])
+        if self.corruption:
+            return InputExample(texts=[example["sentence"], example["rdf_linearized"], example["rdf_corrupted"]])
+        else:
+            return InputExample(texts=[example["sentence"], example["rdf_linearized"]])
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -192,7 +202,7 @@ class WebNlgWikidataDataset(InputExampleDataset):
 
 
 def extract_sq_triplets(examples, src_key, rdf_key):
-    examples[rdf_key] = [[src.split(" | ")] for src in examples[src_key]]
+    examples[rdf_key] = [[src.replace("[QF]", N_TOKEN).split(" | ")] for src in examples[src_key]]
     return examples
 
 
@@ -202,8 +212,10 @@ class SQDataset(InputExampleDataset):
         self.data_file = data_file
         self.dataset = datasets.load_dataset("csv", data_files=data_file)["train"]
         self.incomplete_triple = False
-        self.map(partial(extract_sq_triplets, src_key="src_prime", rdf_key="triples"), load_from_cache_file=False, batched=True)
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
+        self.map(partial(extract_sq_triplets, src_key="src_prime", rdf_key="triples"), batched=True)
+        self.map(partial(extract_sq_triplets, src_key="src_prime_noqf", rdf_key="incomplete_triples"), batched=True)
+        self.map(batch_linearize_rdf, batched=True)
+        self.map(partial(batch_linearize_rdf, rdf_key="incomplete_triples", output_key="incomplete_rdf_linearized"), batched=True)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -211,12 +223,13 @@ class SQDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        if self.incomplete_triple:
-            rdf_linearized = linearize_rdf([example["src_prime_noqf"].replace("QF", N_TOKEN)])
+        rdf_linearized = example["incomplete_rdf_linearized"] if self.incomplete_triple else example["rdf_linearized"]
+        question = example["refs"][0]
+
+        if self.corruption:
+            return InputExample(texts=[question, rdf_linearized, example["rdf_corrupted"]])
         else:
-            rdf_linearized = example["rdf_linearized"]
-        text = example["refs"][0]
-        return InputExample(texts=[rdf_linearized, text])
+            return InputExample(texts=[question, rdf_linearized])
 
     def switch_to_incomplete_triples(self):
         self.incomplete_triple = True
@@ -240,7 +253,7 @@ class GenWikiDataset(InputExampleDataset):
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(GenWikiDataset.batched_fill_in_entities, batched=True)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -259,16 +272,16 @@ class GenWikiDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        triples = example["graph"]
-        text = self.fill_in_entities(example["text"], example["entities"])
-        return InputExample(texts=[linearize_rdf(triples), text])
+        if self.corruption:
+            return InputExample(texts=[example["filled_text"], example["linearized_rdf"], example["corrupted_rdf"]])
+        else:
+            return InputExample(texts=[example["filled_text"], example["linearized_rdf"]])
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
 
     def sentences(self):
-        return [self.fill_in_entities(text, entities) for text, entities in
-                zip(self.dataset["text"], self.dataset["entities"])]
+        return self.dataset["filled_text"]
 
 
 class TRexDataset(InputExampleDataset):
