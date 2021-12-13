@@ -9,9 +9,9 @@ Q_TOKEN = "[Q]"
 S_TOKEN = "[S]"
 P_TOKEN = "[P]"
 O_TOKEN = "[O]"
-N_TOKEN = "[N]"
+N_TOKEN = ""
 SPECIAL_TOKENS = [Q_TOKEN, S_TOKEN, P_TOKEN, O_TOKEN, N_TOKEN]
-CORRUPTION_BATCH_SIZE = 10000 # The higher the better
+CORRUPTION_BATCH_SIZE = 10000  # The higher the better
 
 
 def wrap_triplets(examples, rdf_key):
@@ -36,8 +36,7 @@ def batch_linearize_rdf(examples, rdf_key="triples", output_key="rdf_linearized"
     return examples
 
 
-def corrupt_rdf(triples, replacements: Tuple[List, List, List]):
-
+def corrupt_rdf(triples, replacements: Tuple[List, List, List], max_tries=10):
     encoded_rdf = ""
     for triple in triples:
         replacement_spot = randrange(3)
@@ -46,8 +45,11 @@ def corrupt_rdf(triples, replacements: Tuple[List, List, List]):
         while replacement == triple[replacement_spot]:
             replacement = choice(replacements[replacement_spot])
             tries += 1
-            if tries == 10:
-                raise ValueError("We keep returning the same thing. Is your list of replacements large enough?")
+            if tries == max_tries:
+                raise ValueError(
+                    f"We keep returning the same thing, {triple[replacement_spot]} as a "
+                    f"{['subject', 'property', 'object'][replacement_spot]}. "
+                    f"Is your list of replacements large enough?\n\n{replacements[replacement_spot]}")
         if len(triple) == 3:
             encoded_rdf += f"{S_TOKEN} {triple[0]} {P_TOKEN} {triple[1]} {O_TOKEN} {triple[2]} "
         else:
@@ -108,11 +110,12 @@ class MsMarcoDataset(InputExampleDataset):
 
 
 class KelmDataset(InputExampleDataset):
-    def __init__(self, data_file):
+    def __init__(self, data_file, seed=1951):
         super().__init__()
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True)
+        self.shuffle(seed=seed)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -152,11 +155,12 @@ class GooAqDataset(InputExampleDataset):
 
 
 class TekgenDataset(InputExampleDataset):
-    def __init__(self, data_file):
+    def __init__(self, data_file, seed=1951):
         super().__init__()
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True)
+        self.shuffle(seed=seed)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -177,11 +181,12 @@ class TekgenDataset(InputExampleDataset):
 
 
 class WebNlgWikidataDataset(InputExampleDataset):
-    def __init__(self, data_file):
+    def __init__(self, data_file, seed=1951):
         super().__init__()
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
+        self.shuffle(seed=seed)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -207,7 +212,7 @@ def extract_sq_triplets(examples, src_key, rdf_key):
 
 
 class SQDataset(InputExampleDataset):
-    def __init__(self, data_file):
+    def __init__(self, data_file, seed=1951):
         super().__init__()
         self.data_file = data_file
         self.dataset = datasets.load_dataset("csv", data_files=data_file)["train"]
@@ -215,7 +220,9 @@ class SQDataset(InputExampleDataset):
         self.map(partial(extract_sq_triplets, src_key="src_prime", rdf_key="triples"), batched=True)
         self.map(partial(extract_sq_triplets, src_key="src_prime_noqf", rdf_key="incomplete_triples"), batched=True)
         self.map(batch_linearize_rdf, batched=True)
-        self.map(partial(batch_linearize_rdf, rdf_key="incomplete_triples", output_key="incomplete_rdf_linearized"), batched=True)
+        self.map(partial(batch_linearize_rdf, rdf_key="incomplete_triples", output_key="incomplete_rdf_linearized"),
+                 batched=True)
+        self.shuffle(seed=seed)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -237,9 +244,10 @@ class SQDataset(InputExampleDataset):
     def switch_to_complete_triples(self):
         self.incomplete_triple = False
 
-    def rdfs(self):
-        if self.incomplete_triple:
-            return [linearize_rdf([triple.replace("QF", N_TOKEN)]) for triple in self.dataset["src_prime_noqf"]]
+    def rdfs(self, incomplete=None):
+        incomplete = self.incomplete_triple if incomplete is None else incomplete
+        if incomplete:
+            return self.dataset["incomplete_rdf_linearized"]
         else:
             return self.dataset["rdf_linearized"]
 
@@ -248,12 +256,13 @@ class SQDataset(InputExampleDataset):
 
 
 class GenWikiDataset(InputExampleDataset):
-    def __init__(self, data_file):
+    def __init__(self, data_file, seed=1951):
         super().__init__()
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(GenWikiDataset.batched_fill_in_entities, batched=True)
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
+        self.shuffle(seed=seed)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -267,7 +276,8 @@ class GenWikiDataset(InputExampleDataset):
 
     @classmethod
     def batched_fill_in_entities(cls, examples):
-        examples["filled_text"] = [cls.fill_in_entities(text, entities) for text, entities in zip(examples["text"], examples["entities"])]
+        examples["filled_text"] = [cls.fill_in_entities(text, entities) for text, entities in
+                                   zip(examples["text"], examples["entities"])]
         return examples
 
     def __getitem__(self, item):
@@ -285,11 +295,12 @@ class GenWikiDataset(InputExampleDataset):
 
 
 class TRexDataset(InputExampleDataset):
-    def __init__(self, data_file):
+    def __init__(self, data_file, seed=1951):
         super().__init__()
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
+        self.shuffle(seed=seed)
         self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):

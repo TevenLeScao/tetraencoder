@@ -92,22 +92,29 @@ if __name__ == "__main__":
 
     # Create evaluators
     evaluators = []
+    task_names = []
     if args.eval_webnlg_wikidata_file is not None:
         eval_webnlg_dataset = WebNlgWikidataDataset(args.eval_webnlg_wikidata_file)
         evaluators.append(
             TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(), show_progress_bar=False,
                                  batch_size=args.train_batch_size_per_gpu))
+        task_names.append("WebNLG")
     if args.eval_gooaq_file is not None:
         eval_gooaq_dataset = GooAqDataset(args.eval_gooaq_file)
         evaluators.append(
             TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(), show_progress_bar=False,
                                  batch_size=args.train_batch_size_per_gpu))
+        task_names.append("GOOAQ")
     if args.eval_sq_file is not None:
         eval_sq_dataset = SQDataset(args.eval_sq_file)
-        eval_sq_dataset.select(range(1000))
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(), eval_sq_dataset.questions(), show_progress_bar=False,
+            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=False), eval_sq_dataset.questions(), show_progress_bar=False,
                                  batch_size=args.train_batch_size_per_gpu))
+        task_names.append("SQ_full_triplet")
+        evaluators.append(
+            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=True), eval_sq_dataset.questions(), show_progress_bar=False,
+                                 batch_size=args.train_batch_size_per_gpu))
+        task_names.append("SQ_incomplete_triplet")
     if len(evaluators) == 0:
         evaluator = None
     else:
@@ -134,9 +141,10 @@ if __name__ == "__main__":
             wandb.log({"train_loss": score, "training_steps": steps})
 
         def eval_callback(scores, epoch, steps):
-            wandb.log({"WebNLG@1": scores[0]["recall@1_src2tgt"], "training_steps": steps})
-            wandb.log({"WebNLG@10": scores[0]["recall@10_src2tgt"], "training_steps": steps})
-            wandb.log({"MRR@10": scores[0]["mrr@10_src2tgt"], "training_steps": steps})
+            for i, task_name in enumerate(task_names):
+                wandb.log({f"{task_name}_recall@1": scores[i]["recall@1_src2tgt"], "training_steps": steps})
+                wandb.log({f"{task_name}_recall@10": scores[i]["recall@10_src2tgt"], "training_steps": steps})
+                wandb.log({f"{task_name}_MRR@10": scores[i]["mrr@10_src2tgt"], "training_steps": steps})
 
     else:
         train_callback = None
