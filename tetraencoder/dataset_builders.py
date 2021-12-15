@@ -57,11 +57,11 @@ def corrupt_rdf(triples, replacements: Tuple[List, List, List], max_tries=10):
     return encoded_rdf
 
 
-def batch_corrupt_rdf(examples, rdf_key):
+def batch_corrupt_rdf(examples, rdf_key, max_tries=10):
     replacements = ([triple[0] for rdf in examples[rdf_key] for triple in rdf],
                     [triple[1] for rdf in examples[rdf_key] for triple in rdf],
                     [triple[2] for rdf in examples[rdf_key] for triple in rdf])
-    examples["rdf_corrupted"] = [corrupt_rdf(rdf, replacements) for rdf in examples[rdf_key]]
+    examples["rdf_corrupted"] = [corrupt_rdf(rdf, replacements, max_tries=max_tries) for rdf in examples[rdf_key]]
     return examples
 
 
@@ -301,7 +301,7 @@ class TRexDataset(InputExampleDataset):
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_corrupt_rdf, rdf_key="triples", max_tries=1000), batched=True, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
         return len(self.dataset)
