@@ -9,8 +9,16 @@
 #SBATCH --nodes=16
 #SBATCH --qos=qos_gpu-t3
 
+export TRANSFORMERS_CACHE=$ajs_ALL_CCFRWORK/models
+export HF_DATASETS_CACHE=$ajs_ALL_CCFRWORK/datasets
+export HF_MODULES_CACHE=$ajs_ALL_CCFRWORK/modules
+export HF_METRICS_CACHE=$ajs_ALL_CCFRWORK/metrics
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
 export WANDB_API_KEY=`cat $WORK/wandb_key`
 export WANDB_MODE=offline
+
 source $WORK/virtualenvs/tetrenv/bin/activate
 # Launch !
 srun $WORK/tetraencoder/scripts/accelerate_launcher.sh --multi_gpu --fp16 --num_processes 64 --num_machines 16 $WORK/tetraencoder/tetraencoder/train.py \
