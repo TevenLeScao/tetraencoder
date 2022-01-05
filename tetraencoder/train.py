@@ -103,23 +103,23 @@ if __name__ == "__main__":
     if args.eval_webnlg_wikidata_file is not None:
         eval_webnlg_dataset = WebNlgWikidataDataset(args.eval_webnlg_wikidata_file)
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(), show_progress_bar=False,
+            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(), show_progress_bar=True,
                                  batch_size=args.train_batch_size_per_gpu))
         task_names.append("WebNLG")
     if args.eval_gooaq_file is not None:
         eval_gooaq_dataset = GooAqDataset(args.eval_gooaq_file)
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(), show_progress_bar=False,
+            TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(), show_progress_bar=True,
                                  batch_size=args.train_batch_size_per_gpu))
         task_names.append("GOOAQ")
     if args.eval_sq_file is not None:
         eval_sq_dataset = SQDataset(args.eval_sq_file)
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=False), eval_sq_dataset.questions(), show_progress_bar=False,
+            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=False), eval_sq_dataset.questions(), show_progress_bar=True,
                                  batch_size=args.train_batch_size_per_gpu))
         task_names.append("SQ_full_triplet")
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=True), eval_sq_dataset.questions(), show_progress_bar=False,
+            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=True), eval_sq_dataset.questions(), show_progress_bar=True,
                                  batch_size=args.train_batch_size_per_gpu))
         task_names.append("SQ_incomplete_triplet")
     if len(evaluators) == 0:
