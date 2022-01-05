@@ -1,0 +1,30 @@
+#!/bin/sh
+#SBATCH --job-name=tetraencoder_all_datasets
+#SBATCH --hint=nomultithread
+#SBATCH -A ajs@gpu
+#SBATCH -C v100-32g
+#SBATCH --cpus-per-task=40
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:4
+#SBATCH --nodes=16
+#SBATCH --qos=qos_gpu-t3
+
+export WANDB_API_KEY=`cat $WORK/wandb_key`
+export WANDB_MODE=offline
+source $WORK/virtualenvs/tetrenv/bin/activate
+# Launch !
+srun $WORK/tetraencoder/scripts/accelerate_launcher.sh --multi_gpu --fp16 --num_processes 64 --num_machines 16 $WORK/tetraencoder/tetraencoder/train.py \
+--model_name sentence-transformers/all-mpnet-base-v2 \
+--kelm_file /home/teven_huggingface_co/tetraencoder/datasets/KELM/clean_kelm.jsonl \
+--tekgen_file /home/teven_huggingface_co/tetraencoder/datasets/TEKGEN/processed-tekgen-train.jsonl \
+--trex_file /home/teven_huggingface_co/tetraencoder/datasets/TREx/trex_graphs.jsonl \
+--eval_sq_file /home/teven_huggingface_co/tetraencoder/datasets/SQ/wd/train.csv \
+--eval_webnlg_wikidata_file /home/teven_huggingface_co/tetraencoder/datasets/WebNLG_Wikidata/processed_webnlg_wikidata.jsonl \
+--train_batch_size 32 \
+--output_dir /home/teven_huggingface_co/tetraencoder/outputs \
+--num_epochs 1 \
+--eval_steps 1000 \
+--max_seq_length 384 \
+--wandb \
+--run_name all_datasets_bs2048
+wait
