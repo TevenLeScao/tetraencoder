@@ -31,11 +31,9 @@ if __name__ == "__main__":
     parser.add_argument("--train_batch_size_per_gpu", default=64, type=int)
     parser.add_argument("--num_epochs", default=1, type=int)
     parser.add_argument("--steps_per_epoch", default=None, type=int)
-    parser.add_argument("--eval_steps", default=1000, type=int)
     parser.add_argument("--warmup_steps", default=1000, type=int)
     parser.add_argument("--gradient_accumulation", default=1, type=int)
     parser.add_argument("--lr", default=2e-5, type=float)
-    parser.add_argument("--checkpoint_save_steps", default=10000, type=int)
     parser.add_argument("--hard_negatives", action="store_true")
     # i/o args
     parser.add_argument("--output_dir", default=".", type=str)
@@ -50,14 +48,23 @@ if __name__ == "__main__":
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run_name", default=None, type=str)
     parser.add_argument("--logging_steps", default=100, type=int)
+    parser.add_argument("--eval_steps", default=1000, type=int)
+    parser.add_argument("--checkpoint_save_steps", default=10000, type=int)
+    # distributed training args
+    # TODO: remove after testing
+    parser.add_argument("--local_rank", default=-1, type=int)
+    parser.add_argument("--find_unused_parameters", action="store_true")
     # wrap-up
     args = parser.parse_args()
     print(args)
 
-    kwargs = DistributedDataParallelKwargs(dim=0, broadcast_buffers=True, bucket_cap_mb=25,
-                                           find_unused_parameters=True, check_reduction=False,
-                                           gradient_as_bucket_view=False)
-    accelerator = Accelerator(kwargs_handlers=[kwargs])
+    if args.find_unused_parameters:
+        kwargs = [DistributedDataParallelKwargs(dim=0, broadcast_buffers=True, bucket_cap_mb=25,
+                                               find_unused_parameters=True, check_reduction=False,
+                                               gradient_as_bucket_view=False)]
+    else:
+        kwargs = []
+    accelerator = Accelerator(kwargs_handlers=kwargs)
 
     # Build model
     model = SentenceTransformer(args.model_name, add_pooling_layer=False)
@@ -163,10 +170,10 @@ if __name__ == "__main__":
               checkpoint_save_steps=args.checkpoint_save_steps,
               optimizer_params={'lr': args.lr},
               gradient_accumulation=args.gradient_accumulation,
+              accelerator=accelerator,
               logging_steps=args.logging_steps,
               train_callback=train_callback,
               eval_callback=eval_callback,
-              accelerator=accelerator,
               full_scores_callbacks=True
               )
 

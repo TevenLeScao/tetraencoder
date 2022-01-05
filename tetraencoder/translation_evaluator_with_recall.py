@@ -66,7 +66,7 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
         self.write_csv = write_csv
 
     def __call__(self, model, output_path: str = None, epoch: int = -1, steps: int = -1,
-                 return_all_scores: bool = False) -> Union[Tuple[float, dict], float]:
+                 return_all_scores: bool = False, num_proc: int = None) -> Union[Tuple[float, dict], float]:
         if epoch != -1:
             if steps == -1:
                 out_txt = " after epoch {}:".format(epoch)
@@ -79,10 +79,10 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
 
         src_embeddings = torch.stack(
             model.encode(self.source_sentences, show_progress_bar=self.show_progress_bar, batch_size=self.batch_size,
-                         convert_to_numpy=False))
+                         convert_to_numpy=False, num_proc=num_proc))
         tgt_embeddings = torch.stack(
             model.encode(self.target_sentences, show_progress_bar=self.show_progress_bar, batch_size=self.batch_size,
-                         convert_to_numpy=False))
+                         convert_to_numpy=False, num_proc=num_proc))
 
         cos_sims = pytorch_cos_sim(src_embeddings, tgt_embeddings).detach().cpu().numpy()
 
@@ -121,6 +121,8 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
                 if not output_file_exists:
                     writer.writerow(self.csv_headers)
                 writer.writerow([epoch, steps] + outputs)
+
+        print({self.output_names[i]: outputs[i] for i in range(len(outputs))})
 
         if return_all_scores:
             return (acc_src2trg + acc_trg2src) / 2, {self.output_names[i]: outputs[i] for i in range(len(outputs))}
