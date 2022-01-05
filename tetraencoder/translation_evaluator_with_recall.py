@@ -122,8 +122,6 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
                     writer.writerow(self.csv_headers)
                 writer.writerow([epoch, steps] + outputs)
 
-        print({self.output_names[i]: outputs[i] for i in range(len(outputs))})
-
         if return_all_scores:
             return (acc_src2trg + acc_trg2src) / 2, {self.output_names[i]: outputs[i] for i in range(len(outputs))}
         else:
