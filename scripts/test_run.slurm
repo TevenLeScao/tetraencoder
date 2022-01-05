@@ -12,6 +12,7 @@ export TRANSFORMERS_CACHE=$ajs_ALL_CCFRWORK/models
 export HF_DATASETS_CACHE=$ajs_ALL_CCFRWORK/datasets
 export HF_MODULES_CACHE=$ajs_ALL_CCFRWORK/modules
 export HF_METRICS_CACHE=$ajs_ALL_CCFRWORK/metrics
+export TORCH_HOME=$ajs_ALL_CCFRWORK/torch_cache
 export HF_DATASETS_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
