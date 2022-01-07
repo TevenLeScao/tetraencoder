@@ -27,7 +27,7 @@ srun $WORK/tetraencoder/scripts/accelerate_launcher.sh --multi_gpu --fp16 --num_
 --kelm_file $WORK/tetraencoder/datasets/KELM/clean_kelm.jsonl \
 --tekgen_file $WORK/tetraencoder/datasets/TEKGEN/processed-tekgen-train.jsonl \
 --trex_file $WORK/tetraencoder/datasets/TREx/trex_graphs.jsonl \
---eval_sq_file $WORK/tetraencoder/datasets/SQ/wd/train.csv \
+--eval_sq_file $WORK/tetraencoder/datasets/SQ/wd/all_splits.csv \
 --eval_webnlg_wikidata_file $WORK/tetraencoder/datasets/WebNLG_Wikidata/processed_webnlg_wikidata.jsonl \
 --train_batch_size 32 \
 --output_dir $WORK/tetraencoder/outputs \
