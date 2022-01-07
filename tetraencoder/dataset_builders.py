@@ -231,7 +231,7 @@ class SQDataset(InputExampleDataset):
     def __getitem__(self, item):
         example = self.dataset[item]
         rdf_linearized = example["incomplete_rdf_linearized"] if self.incomplete_triple else example["rdf_linearized"]
-        question = example["refs"][0]
+        question = example["refs"]
 
         if self.corruption:
             return InputExample(texts=[question, rdf_linearized, example["rdf_corrupted"]])
