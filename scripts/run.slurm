@@ -23,7 +23,7 @@ export WANDB_MODE=offline
 source $WORK/virtualenvs/tetrenv/bin/activate
 # Launch !
 srun $WORK/tetraencoder/scripts/accelerate_launcher.sh --multi_gpu --fp16 --num_processes 64 --num_machines 16 $WORK/tetraencoder/tetraencoder/train.py \
---model_name $WORK/tetraencoder/all-mpnet-base-v2 \
+--model_name_or_path $WORK/tetraencoder/all-mpnet-base-v2 \
 --kelm_file $WORK/tetraencoder/datasets/KELM/clean_kelm.jsonl \
 --tekgen_file $WORK/tetraencoder/datasets/TEKGEN/processed-tekgen-train.jsonl \
 --trex_file $WORK/tetraencoder/datasets/TREx/trex_graphs.jsonl \

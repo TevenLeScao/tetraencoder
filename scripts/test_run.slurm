@@ -27,7 +27,7 @@ srun $WORK/tetraencoder/scripts/accelerate_launcher.sh \
 --num_processes 8 \
 --num_machines 2  \
 $WORK/tetraencoder/tetraencoder/train.py \
---model_name $WORK/tetraencoder/all-mpnet-base-v2 \
+--model_name_or_path $WORK/tetraencoder/all-mpnet-base-v2 \
 --kelm_file $WORK/tetraencoder/datasets/KELM/clean_kelm.jsonl \
 --tekgen_file $WORK/tetraencoder/datasets/TEKGEN/processed-tekgen-train.jsonl \
 --trex_file $WORK/tetraencoder/datasets/TREx/trex_graphs.jsonl \

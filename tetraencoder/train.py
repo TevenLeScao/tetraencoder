@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     # model args
-    parser.add_argument("--model_name", default="roberta-base", type=str)
+    parser.add_argument("--model_name_or_path", default="roberta-base", type=str)
     parser.add_argument("--max_seq_length", default=512, type=int)
     # training args
     parser.add_argument("--train_batch_size_per_gpu", default=64, type=int)
@@ -55,7 +55,7 @@ if __name__ == "__main__":
     parser.add_argument("--run_name", default=None, type=str)
     parser.add_argument("--logging_steps", default=100, type=int)
     parser.add_argument("--eval_steps", default=1000, type=int)
-    parser.add_argument("--checkpoint_save_steps", default=10000, type=int)
+    parser.add_argument("--checkpoint_save_steps", default=1000, type=int)
     # distributed training args
     # TODO: remove after testing
     parser.add_argument("--local_rank", default=-1, type=int)
@@ -73,7 +73,7 @@ if __name__ == "__main__":
     accelerator = Accelerator(kwargs_handlers=kwargs)
 
     # Build model
-    model = SentenceTransformer(args.model_name, add_pooling_layer=False)
+    model = SentenceTransformer(args.model_name_or_path, add_pooling_layer=False)
     model.max_seq_length = args.max_seq_length
     word_embedding_model = model._first_module()
     word_embedding_model.tokenizer.add_tokens(SPECIAL_TOKENS, special_tokens=True)
@@ -83,9 +83,7 @@ if __name__ == "__main__":
     train_datasets = [dataset_name for dataset_name in dataset_builders if
                       vars(args)[f"{dataset_name}_file"] is not None]
     name = args.run_name if args.run_name is not None else \
-        f"{args.model_name.replace('/', '-')}_{'_'.join(train_datasets)}"
-
-    model_save_path = os.path.join(args.output_dir, f'{name}-{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}')
+        f"{args.model_name_or_path.replace('/', '-')}_{'_'.join(train_datasets)}"
 
     # Build datasets
     source_data = {}
@@ -111,7 +109,7 @@ if __name__ == "__main__":
         eval_webnlg_dataset = WebNlgWikidataDataset(args.eval_webnlg_wikidata_file)
         evaluators.append(
             TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(),
-                                           show_progress_bar=True,
+                                           show_progress_bar=False,
                                            batch_size=args.eval_batch_size_per_gpu))
         task_names.append("WebNLG")
 
@@ -120,7 +118,7 @@ if __name__ == "__main__":
         eval_gooaq_dataset = GooAqDataset(args.eval_gooaq_file)
         evaluators.append(
             TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(),
-                                           show_progress_bar=True,
+                                           show_progress_bar=False,
                                            batch_size=args.eval_batch_size_per_gpu))
         task_names.append("GOOAQ")
 
@@ -129,12 +127,12 @@ if __name__ == "__main__":
         eval_sq_dataset = SQDataset(args.eval_sq_file)
         evaluators.append(
             TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=False), eval_sq_dataset.questions(),
-                                           show_progress_bar=True,
+                                           show_progress_bar=False,
                                            batch_size=args.eval_batch_size_per_gpu))
         task_names.append("SQ_full_triplet")
         # evaluators.append(
         #     TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=True), eval_sq_dataset.questions(),
-        #                                    show_progress_bar=True,
+        #                                    show_progress_bar=False,
         #                                    batch_size=args.eval_batch_size_per_gpu))
         # task_names.append("SQ_incomplete_triplet")
 
@@ -148,26 +146,23 @@ if __name__ == "__main__":
             corpus = {i: passage for i, passage in enumerate(passages["text"])}
             relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
             evaluators.append(
-                InformationRetrievalEvaluator(queries, corpus, relevant_docs, show_progress_bar=True,
+                InformationRetrievalEvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
                                               corpus_chunk_size=args.eval_batch_size_per_gpu*16, precision_recall_at_k=[10],
                                               accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu, score_functions={'cos_sim': cos_sim}))
             task_names.append("MPWW_fullIR")
         else:
             evaluators.append(
                 TranslationEvaluatorWithRecall(mpww.rdfs(), mpww.sentences(),
-                                               show_progress_bar=True,
+                                               show_progress_bar=False,
                                                batch_size=args.eval_batch_size_per_gpu))
             task_names.append("MPWW_partial")
     else:
         assert args.eval_mpww_file is None
 
     if len(evaluators) == 0:
-        evaluator = None
+        sequential_evaluator = None
     else:
-        evaluator = SequentialEvaluator(evaluators, main_score_function=lambda scores: scores[0])
-
-    os.makedirs(model_save_path, exist_ok=True)
-    # evaluator(model, epoch=0, steps=0, output_path=model_save_path)
+        sequential_evaluator = SequentialEvaluator(evaluators, main_score_function=lambda scores: scores[0])
 
     if args.wandb and accelerator.is_main_process:
 
@@ -175,7 +170,7 @@ if __name__ == "__main__":
 
         wandb.init(project="rdf-embeddings", entity="flukeellington", name=name)
         wandb.config = {
-            "model_name": args.model_name,
+            "model_name_or_path": args.model_name_or_path,
             "epochs": args.num_epochs,
             "learning_rate": args.lr,
             "warmup_steps": args.warmup_steps,
@@ -192,7 +187,6 @@ if __name__ == "__main__":
         def eval_callback(scores, epoch, steps):
             for i, task_name in enumerate(task_names):
                 if task_name == "MPWW":
-                    print(scores)
                     wandb.log({f"{task_name}_accuracy@1": scores[i]["cos_sim"]["accuracy@k"][1], "training_steps": steps})
                     wandb.log({f"{task_name}_recall@10": scores[i]["cos_sim"]["recall@k"][10], "training_steps": steps})
                     wandb.log({f"{task_name}_precision@10": scores[i]["cos_sim"]["precision@k"][10], "training_steps": steps})
@@ -206,25 +200,52 @@ if __name__ == "__main__":
         train_callback = None
         eval_callback = None
 
-    # Train the model
-    model.fit(train_objectives=[(dataloader, train_loss) for dataloader in dataloaders.values()],
-              evaluator=evaluator,
-              evaluation_steps=args.eval_steps,
-              epochs=args.num_epochs,
-              steps_per_epoch=args.steps_per_epoch,
-              warmup_steps=args.warmup_steps,
-              use_amp=False,
-              checkpoint_path=model_save_path,
-              output_path=model_save_path,
-              checkpoint_save_steps=args.checkpoint_save_steps,
-              optimizer_params={'lr': args.lr},
-              gradient_accumulation=args.gradient_accumulation,
-              accelerator=accelerator,
-              logging_steps=args.logging_steps,
-              train_callback=train_callback,
-              eval_callback=eval_callback,
-              full_scores_callbacks=True
-              )
+    if args.num_epochs > 0:
+        # Train the model
+        model_save_path = os.path.join(args.output_dir, f'{name}-{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}')
+        checkpoint_save_path = os.path.join(model_save_path, "checkpoints")
+        os.makedirs(model_save_path, exist_ok=True)
+        model.fit(train_objectives=[(dataloader, train_loss) for dataloader in dataloaders.values()],
+                  evaluator=sequential_evaluator,
+                  evaluation_steps=args.eval_steps,
+                  epochs=args.num_epochs,
+                  steps_per_epoch=args.steps_per_epoch,
+                  warmup_steps=args.warmup_steps,
+                  use_amp=False,
+                  checkpoint_path=checkpoint_save_path,
+                  output_path=model_save_path,
+                  checkpoint_save_steps=args.checkpoint_save_steps,
+                  optimizer_params={'lr': args.lr},
+                  gradient_accumulation=args.gradient_accumulation,
+                  accelerator=accelerator,
+                  logging_steps=args.logging_steps,
+                  train_callback=train_callback,
+                  eval_callback=eval_callback,
+                  full_scores_callbacks=True
+                  )
 
-    # Save the model
-    model.save(model_save_path)
+    else:
+        # trying to infer to which step went the model we're evaluating
+        try:
+            training_step = int(args.model_name_or_path.split("/")[-1])
+        except ValueError:
+            training_step = -1
+
+        # evaluating
+        eval_path = os.path.join(args.model_name_or_path, "eval_out_of_training")
+        os.makedirs(eval_path, exist_ok=True)
+        main_score, scores = sequential_evaluator(model, output_path=eval_path, steps=training_step, epoch=1, return_all_scores=True)
+
+        # logging
+        if args.wandb and accelerator.is_main_process:
+            for i, task_name in enumerate(task_names):
+                if task_name == "MPWW":
+                    wandb.log({f"{task_name}_accuracy@1": scores[i]["cos_sim"]["accuracy@k"][1], "training_steps": training_step})
+                    wandb.log({f"{task_name}_recall@10": scores[i]["cos_sim"]["recall@k"][10], "training_steps": training_step})
+                    wandb.log(
+                        {f"{task_name}_precision@10": scores[i]["cos_sim"]["precision@k"][10], "training_steps": training_step})
+                    wandb.log({f"{task_name}_MRR@10": scores[i]["cos_sim"]["mrr@k"][10], "training_steps": training_step})
+                else:
+                    wandb.log({f"{task_name}_recall@1": scores[i]["recall@1_src2tgt"], "training_steps": training_step})
+                    wandb.log({f"{task_name}_recall@10": scores[i]["recall@10_src2tgt"], "training_steps": training_step})
+                    wandb.log({f"{task_name}_MRR@10": scores[i]["mrr@10_src2tgt"], "training_steps": training_step})
