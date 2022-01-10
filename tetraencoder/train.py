@@ -140,18 +140,24 @@ if __name__ == "__main__":
 
     if args.eval_mpww_file is not None:
         print("adding MPWW queries eval data")
-        assert args.eval_mpww_passages_file is not None
         mpww = MPWWDataset(args.eval_mpww_file)
-        queries = {i: query for i, query in enumerate(mpww.rdfs())}
-        print("adding MPWW passages corpus eval data")
-        passages = load_dataset("csv", data_files=args.eval_mpww_passages_file)["train"]
-        corpus = {i: passage for i, passage in enumerate(passages["text"])}
-        relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
-        evaluators.append(
-            InformationRetrievalEvaluator(queries, corpus, relevant_docs, show_progress_bar=True,
-                                          corpus_chunk_size=args.eval_batch_size_per_gpu*16, precision_recall_at_k=[10],
-                                          accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu, score_functions={'cos_sim': cos_sim}))
-        task_names.append("MPWW")
+        if args.eval_mpww_passages_file is not None:
+            queries = {i: query for i, query in enumerate(mpww.rdfs())}
+            print("adding MPWW passages corpus eval data")
+            passages = load_dataset("csv", data_files=args.eval_mpww_passages_file)["train"]
+            corpus = {i: passage for i, passage in enumerate(passages["text"])}
+            relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
+            evaluators.append(
+                InformationRetrievalEvaluator(queries, corpus, relevant_docs, show_progress_bar=True,
+                                              corpus_chunk_size=args.eval_batch_size_per_gpu*16, precision_recall_at_k=[10],
+                                              accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu, score_functions={'cos_sim': cos_sim}))
+            task_names.append("MPWW_fullIR")
+        else:
+            evaluators.append(
+                TranslationEvaluatorWithRecall(mpww.rdfs(), mpww.sentences(),
+                                               show_progress_bar=True,
+                                               batch_size=args.eval_batch_size_per_gpu))
+            task_names.append("MPWW_partial")
     else:
         assert args.eval_mpww_file is None
 
