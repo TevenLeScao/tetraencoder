@@ -4,11 +4,14 @@ import random
 from datetime import datetime
 from time import time
 
+from datasets import load_dataset
 import numpy as np
 import torch
 from accelerate import DistributedDataParallelKwargs, Accelerator
 from sentence_transformers import SentenceTransformer, losses
-from sentence_transformers.evaluation import TranslationEvaluator, SequentialEvaluator
+from sentence_transformers.evaluation import TranslationEvaluator, SequentialEvaluator, InformationRetrievalEvaluator
+from sentence_transformers.util import cos_sim
+
 from translation_evaluator_with_recall import TranslationEvaluatorWithRecall
 from torch.utils.data import DataLoader
 
@@ -29,6 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_seq_length", default=512, type=int)
     # training args
     parser.add_argument("--train_batch_size_per_gpu", default=64, type=int)
+    parser.add_argument("--eval_batch_size_per_gpu", default=64, type=int)
     parser.add_argument("--num_epochs", default=1, type=int)
     parser.add_argument("--steps_per_epoch", default=None, type=int)
     parser.add_argument("--warmup_steps", default=1000, type=int)
@@ -44,6 +48,8 @@ if __name__ == "__main__":
     parser.add_argument("--eval_webnlg_wikidata_file", default=None, type=str)
     parser.add_argument("--eval_gooaq_file", default=None, type=str)
     parser.add_argument("--eval_sq_file", default=None, type=str)
+    parser.add_argument("--eval_mpww_file", default=None, type=str)
+    parser.add_argument("--eval_mpww_passages_file", default=None, type=str)
     # instrumentation
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run_name", default=None, type=str)
@@ -60,8 +66,8 @@ if __name__ == "__main__":
 
     if args.find_unused_parameters:
         kwargs = [DistributedDataParallelKwargs(dim=0, broadcast_buffers=True, bucket_cap_mb=25,
-                                               find_unused_parameters=True, check_reduction=False,
-                                               gradient_as_bucket_view=False)]
+                                                find_unused_parameters=True, check_reduction=False,
+                                                gradient_as_bucket_view=False)]
     else:
         kwargs = []
     accelerator = Accelerator(kwargs_handlers=kwargs)
@@ -101,27 +107,54 @@ if __name__ == "__main__":
     evaluators = []
     task_names = []
     if args.eval_webnlg_wikidata_file is not None:
+        print("adding WebNLG eval data")
         eval_webnlg_dataset = WebNlgWikidataDataset(args.eval_webnlg_wikidata_file)
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(), show_progress_bar=True,
-                                 batch_size=args.train_batch_size_per_gpu))
+            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(),
+                                           show_progress_bar=True,
+                                           batch_size=args.eval_batch_size_per_gpu))
         task_names.append("WebNLG")
+
     if args.eval_gooaq_file is not None:
+        print("adding GOOAQ eval data")
         eval_gooaq_dataset = GooAqDataset(args.eval_gooaq_file)
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(), show_progress_bar=True,
-                                 batch_size=args.train_batch_size_per_gpu))
+            TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(),
+                                           show_progress_bar=True,
+                                           batch_size=args.eval_batch_size_per_gpu))
         task_names.append("GOOAQ")
+
     if args.eval_sq_file is not None:
+        print("adding SQ eval data")
         eval_sq_dataset = SQDataset(args.eval_sq_file)
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=False), eval_sq_dataset.questions(), show_progress_bar=True,
-                                 batch_size=args.train_batch_size_per_gpu))
+            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=False), eval_sq_dataset.questions(),
+                                           show_progress_bar=True,
+                                           batch_size=args.eval_batch_size_per_gpu))
         task_names.append("SQ_full_triplet")
+        # evaluators.append(
+        #     TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=True), eval_sq_dataset.questions(),
+        #                                    show_progress_bar=True,
+        #                                    batch_size=args.eval_batch_size_per_gpu))
+        # task_names.append("SQ_incomplete_triplet")
+
+    if args.eval_mpww_file is not None:
+        print("adding MPWW queries eval data")
+        assert args.eval_mpww_passages_file is not None
+        mpww = MPWWDataset(args.eval_mpww_file)
+        queries = {i: query for i, query in enumerate(mpww.rdfs())}
+        print("adding MPWW passages corpus eval data")
+        passages = load_dataset("csv", data_files=args.eval_mpww_passages_file)["train"]
+        corpus = {i: passage for i, passage in enumerate(passages["text"])}
+        relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
         evaluators.append(
-            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=True), eval_sq_dataset.questions(), show_progress_bar=True,
-                                 batch_size=args.train_batch_size_per_gpu))
-        task_names.append("SQ_incomplete_triplet")
+            InformationRetrievalEvaluator(queries, corpus, relevant_docs, show_progress_bar=True,
+                                          corpus_chunk_size=args.eval_batch_size_per_gpu*16, precision_recall_at_k=[10],
+                                          accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu, score_functions={'cos_sim': cos_sim}))
+        task_names.append("MPWW")
+    else:
+        assert args.eval_mpww_file is None
+
     if len(evaluators) == 0:
         evaluator = None
     else:
@@ -133,6 +166,7 @@ if __name__ == "__main__":
     if args.wandb and accelerator.is_main_process:
 
         import wandb
+
         wandb.init(project="rdf-embeddings", entity="flukeellington", name=name)
         wandb.config = {
             "model_name": args.model_name,
@@ -144,14 +178,23 @@ if __name__ == "__main__":
             "train_datasets": train_datasets
         }
 
+
         def train_callback(score, epoch, steps):
             wandb.log({"train_loss": score, "training_steps": steps})
 
+
         def eval_callback(scores, epoch, steps):
             for i, task_name in enumerate(task_names):
-                wandb.log({f"{task_name}_recall@1": scores[i]["recall@1_src2tgt"], "training_steps": steps})
-                wandb.log({f"{task_name}_recall@10": scores[i]["recall@10_src2tgt"], "training_steps": steps})
-                wandb.log({f"{task_name}_MRR@10": scores[i]["mrr@10_src2tgt"], "training_steps": steps})
+                if task_name == "MPWW":
+                    print(scores)
+                    wandb.log({f"{task_name}_accuracy@1": scores[i]["cos_sim"]["accuracy@k"][1], "training_steps": steps})
+                    wandb.log({f"{task_name}_recall@10": scores[i]["cos_sim"]["recall@k"][10], "training_steps": steps})
+                    wandb.log({f"{task_name}_precision@10": scores[i]["cos_sim"]["precision@k"][10], "training_steps": steps})
+                    wandb.log({f"{task_name}_MRR@10": scores[i]["cos_sim"]["mrr@k"][10], "training_steps": steps})
+                else:
+                    wandb.log({f"{task_name}_recall@1": scores[i]["recall@1_src2tgt"], "training_steps": steps})
+                    wandb.log({f"{task_name}_recall@10": scores[i]["recall@10_src2tgt"], "training_steps": steps})
+                    wandb.log({f"{task_name}_MRR@10": scores[i]["mrr@10_src2tgt"], "training_steps": steps})
 
     else:
         train_callback = None

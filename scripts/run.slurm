@@ -35,5 +35,6 @@ srun $WORK/tetraencoder/scripts/accelerate_launcher.sh --multi_gpu --fp16 --num_
 --eval_steps 1000 \
 --max_seq_length 384 \
 --wandb \
---run_name all_datasets_bs2048
+--run_name all_datasets_bs2048 \
+--find_unused_parameters
 wait

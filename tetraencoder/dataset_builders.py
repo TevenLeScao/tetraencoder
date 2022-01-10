@@ -315,3 +315,24 @@ class TRexDataset(InputExampleDataset):
 
     def sentences(self):
         return self.dataset["text"]
+
+
+class MPWWDataset(InputExampleDataset):
+    def __init__(self, data_file):
+        super().__init__()
+        self.data_file = data_file
+        self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
+        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True)
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, item):
+        example = self.dataset[item]
+        return InputExample(texts=[example["rdf_linearized"], example["text"]])
+
+    def rdfs(self):
+        return self.dataset["rdf_linearized"]
+
+    def sentences(self):
+        return self.dataset["text"]

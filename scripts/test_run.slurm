@@ -33,11 +33,12 @@ $WORK/tetraencoder/tetraencoder/train.py \
 --trex_file $WORK/tetraencoder/datasets/TREx/trex_graphs.jsonl \
 --eval_sq_file $WORK/tetraencoder/datasets/SQ/wd/all_splits.csv \
 --eval_webnlg_wikidata_file $WORK/tetraencoder/datasets/WebNLG_Wikidata/processed_webnlg_wikidata.jsonl \
---train_batch_size 32 \
+--train_batch_size 16 \
 --output_dir $WORK/tetraencoder/outputs \
 --num_epochs 1 \
 --eval_steps 1000 \
 --max_seq_length 384 \
 --wandb \
---run_name all_datasets_bs2048
+--run_name all_datasets_bs2048 \
+--find_unused_parameters
 wait

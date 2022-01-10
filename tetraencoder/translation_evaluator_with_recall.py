@@ -65,8 +65,8 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
         self.csv_headers = ["epoch", "steps"] + self.output_names
         self.write_csv = write_csv
 
-    def __call__(self, model, output_path: str = None, epoch: int = -1, steps: int = -1,
-                 return_all_scores: bool = False, num_proc: int = None) -> Union[Tuple[float, dict], float]:
+    def __call__(self, model, output_path: str = None, epoch: int = -1, steps: int = -1, num_proc: int = None,
+                 return_all_scores: bool = False) -> Union[Tuple[float, dict], float]:
         if epoch != -1:
             if steps == -1:
                 out_txt = " after epoch {}:".format(epoch)
