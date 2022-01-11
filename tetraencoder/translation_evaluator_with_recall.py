@@ -8,6 +8,8 @@ import torch
 from sentence_transformers.evaluation import SentenceEvaluator
 from sentence_transformers.util import pytorch_cos_sim
 
+from util import all_sims
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,14 +79,8 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
 
         logger.info("Evaluating translation matching Accuracy on " + self.name + " dataset" + out_txt)
 
-        src_embeddings = torch.stack(
-            model.encode(self.source_sentences, show_progress_bar=self.show_progress_bar, batch_size=self.batch_size,
-                         convert_to_numpy=False, num_proc=num_proc))
-        tgt_embeddings = torch.stack(
-            model.encode(self.target_sentences, show_progress_bar=self.show_progress_bar, batch_size=self.batch_size,
-                         convert_to_numpy=False, num_proc=num_proc))
-
-        cos_sims = pytorch_cos_sim(src_embeddings, tgt_embeddings).detach().cpu().numpy()
+        cos_sims = all_sims(self.source_sentences, self.target_sentences,
+                            model, batch_size=self.batch_size).detach().cpu().numpy()
 
         src2tgt_recall_scores = []
         tgt2src_recall_scores = []
@@ -113,7 +109,7 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
         assert len(outputs) == len(self.output_names), \
             f"Mismatched output length {len(outputs)} and expected output length {len(self.output_names)}"
 
-        if output_path is not None and self.write_csv:
+        if output_path is not None and self.write_csv and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
             csv_path = os.path.join(output_path, self.csv_file)
             output_file_exists = os.path.isfile(csv_path)
             with open(csv_path, newline='', mode="a" if output_file_exists else 'w', encoding="utf-8") as f:

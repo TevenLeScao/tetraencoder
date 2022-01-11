@@ -2,26 +2,10 @@ import argparse
 from functools import partial
 from multiprocess import set_start_method
 
-import torch
-import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 
 from dataset_builders import GenWikiDataset, TRexDataset
-
-
-def embed_pairs(examples: dict, rank: int, model: SentenceTransformer, text_key: str, rdf_key: str, batch_size: int):
-    device = f"cuda:{rank % torch.cuda.device_count()}"
-    model = model.to(device)
-    embeddings1 = torch.stack(
-        model.encode(examples[text_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size, device=device))
-    embeddings2 = torch.stack(
-        model.encode(examples[rdf_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size, device=device))
-
-    cos_sims = F.cosine_similarity(embeddings1, embeddings2).detach().cpu().numpy()
-    examples["similarity"] = cos_sims
-
-    return examples
-
+from util import pair_sims_datasets_map
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -53,6 +37,6 @@ if __name__ == "__main__":
         dataset = dataset.select(range(args.subset))
     set_start_method("spawn")
     dataset = dataset.map(
-        partial(embed_pairs, model=model, text_key=text_key, rdf_key=rdf_key, batch_size=args.batch_size),
+        partial(pair_sims_datasets_map, model=model, text_key=text_key, rdf_key=rdf_key, batch_size=args.batch_size),
         batched=True, batch_size=args.batch_size, with_rank=True, num_proc=2)
     dataset.to_json(out_path)
