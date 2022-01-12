@@ -29,7 +29,8 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
                  print_wrong_matches: bool = False,
                  write_csv: bool = True,
                  mrr_ks: List[int] = None,
-                 recall_ks: List[int] = None):
+                 recall_ks: List[int] = None,
+                 reverse_eval=False):
         """
         Constructs an evaluator based for the dataset
 
@@ -52,7 +53,9 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
         self.print_wrong_matches = print_wrong_matches
 
         self.mrr_ks = [10] if mrr_ks is None else mrr_ks
-        self.recall_ks = [1, 3, 5, 10] if recall_ks is None else recall_ks
+        self.recall_ks = [1, 10] if recall_ks is None else recall_ks
+        self.all_ks = set(self.mrr_ks + self.recall_ks)
+        self.reverse_eval = reverse_eval
 
         assert len(self.source_sentences) == len(self.target_sentences)
 
@@ -61,9 +64,10 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
 
         self.csv_file = "translation_evaluation" + name + "_results.csv"
         self.output_names = [f"recall@{k}_src2tgt" for k in self.recall_ks] + \
-                            [f"recall@{k}_tgt2src" for k in self.recall_ks] + \
-                            [f"mrr@{k}_src2tgt" for k in self.mrr_ks] + \
-                            [f"mrr@{k}_tgt2src" for k in self.mrr_ks]
+                            [f"mrr@{k}_src2tgt" for k in self.mrr_ks]
+        if self.reverse_eval:
+            self.output_names += [f"recall@{k}_tgt2src" for k in self.recall_ks] + \
+                                 [f"mrr@{k}_tgt2src" for k in self.mrr_ks]
         self.csv_headers = ["epoch", "steps"] + self.output_names
         self.write_csv = write_csv
 
@@ -79,33 +83,32 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
 
         logger.info("Evaluating translation matching Accuracy on " + self.name + " dataset" + out_txt)
 
+        src2tgt_recall_scores = []
+        src2tgt_mrr_scores = []
+        tgt2src_recall_scores = []
+        tgt2src_mrr_scores = []
         cos_sims = all_sims(self.source_sentences, self.target_sentences,
                             model, batch_size=self.batch_size).detach().cpu().numpy()
-
-        src2tgt_recall_scores = []
-        tgt2src_recall_scores = []
-        src2tgt_mrr_scores = []
-        tgt2src_mrr_scores = []
-
+        max_idxes_per_k = {k: np.argpartition(cos_sims, -k, axis=1)[:, -k:] for k in self.all_ks}
         for k in self.recall_ks:
-            src2tgt_recall_scores.append(self.recall_at_k(k, cos_sims, verbose=self.print_wrong_matches and k == 1))
+            src2tgt_recall_scores.append(self.recall_at_k(k, max_idxes_per_k[k], cos_sims,
+                                                          verbose=self.print_wrong_matches and k == 1))
         for k in self.mrr_ks:
-            src2tgt_mrr_scores.append(self.mrr_at_k(k, cos_sims))
-
-        cos_sims = cos_sims.T
-
-        for k in self.recall_ks:
-            tgt2src_recall_scores.append(self.recall_at_k(k, cos_sims))
-        for k in self.mrr_ks:
-            tgt2src_mrr_scores.append(self.mrr_at_k(k, cos_sims))
-
+            src2tgt_mrr_scores.append(self.mrr_at_k(k, max_idxes_per_k[k], cos_sims))
         acc_src2trg = src2tgt_recall_scores[0]
-        acc_trg2src = tgt2src_recall_scores[0]
-
         logger.info("Accuracy src2trg: {:.2f}".format(acc_src2trg * 100))
-        logger.info("Accuracy trg2src: {:.2f}".format(acc_trg2src * 100))
 
-        outputs = src2tgt_recall_scores + tgt2src_recall_scores + src2tgt_mrr_scores + tgt2src_mrr_scores
+        if self.reverse_eval:
+            cos_sims = cos_sims.T
+            max_idxes_per_k = {k: np.argpartition(cos_sims, -k, axis=1)[:, -k:] for k in self.all_ks}
+            for k in self.recall_ks:
+                tgt2src_recall_scores.append(self.recall_at_k(k, max_idxes_per_k[k], cos_sims))
+            for k in self.mrr_ks:
+                tgt2src_mrr_scores.append(self.mrr_at_k(k, max_idxes_per_k[k], cos_sims))
+            acc_trg2src = tgt2src_recall_scores[0]
+            logger.info("Accuracy trg2src: {:.2f}".format(acc_trg2src * 100))
+
+        outputs = src2tgt_recall_scores + src2tgt_mrr_scores + tgt2src_recall_scores + tgt2src_mrr_scores
         assert len(outputs) == len(self.output_names), \
             f"Mismatched output length {len(outputs)} and expected output length {len(self.output_names)}"
 
@@ -119,14 +122,13 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
                 writer.writerow([epoch, steps] + outputs)
 
         if return_all_scores:
-            return (acc_src2trg + acc_trg2src) / 2, {self.output_names[i]: outputs[i] for i in range(len(outputs))}
+            return acc_src2trg, {self.output_names[i]: outputs[i] for i in range(len(outputs))}
         else:
-            return (acc_src2trg + acc_trg2src) / 2
+            return acc_src2trg
 
-    def recall_at_k(self, k, cos_sims, verbose=False):
+    def recall_at_k(self, k, max_idxes, cos_sims, verbose=False):
 
         correct_src2trg = 0
-        max_idxes = np.argpartition(cos_sims, -k, axis=1)[:, -k:]
         for i in range(len(cos_sims)):
             max_idx = max_idxes[i]
             if i in max_idx:
@@ -144,9 +146,8 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
 
         return correct_src2trg / len(cos_sims)
 
-    def mrr_at_k(self, k, cos_sims, verbose=False):
+    def mrr_at_k(self, k, max_idxes, cos_sims, verbose=False):
 
-        max_idxes = np.argpartition(cos_sims, -k, axis=1)[:, -k:]
         sorted_max_idxes = np.take_along_axis(max_idxes, np.argsort(np.take_along_axis(cos_sims, max_idxes, axis=1)),
                                               axis=1)
         total_reciprocal_rank = 0
