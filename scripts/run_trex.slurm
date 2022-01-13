@@ -1,5 +1,5 @@
 #!/bin/sh
-#SBATCH --job-name=all_datasets_bs2560_hard_neg
+#SBATCH --job-name=trex_bs2560_hard_neg
 #SBATCH --hint=nomultithread
 #SBATCH -A ajs@gpu
 #SBATCH -C v100-32g
@@ -9,8 +9,8 @@
 #SBATCH --nodes=32
 #SBATCH --qos=qos_gpu-t3
 #SBATCH -t 02:00:00
-#SBATCH -o /gpfsscratch/rech/ajs/uhk85as/tetraencoder_xps/log-all_datasets_bs2560_hard_neg-%j.out
-#SBATCH -e /gpfsscratch/rech/ajs/uhk85as/tetraencoder_xps/log-all_datasets_bs2560_hard_neg-%j.err
+#SBATCH -o /gpfsscratch/rech/ajs/uhk85as/tetraencoder_xps/log-trex_bs2560_hard_neg-%j.out
+#SBATCH -e /gpfsscratch/rech/ajs/uhk85as/tetraencoder_xps/log-trex_bs2560_hard_neg-%j.err
 
 export TRANSFORMERS_CACHE=$ajs_ALL_CCFRWORK/models
 export HF_DATASETS_CACHE=$ajs_ALL_CCFRWORK/datasets
@@ -32,8 +32,6 @@ srun $WORK/tetraencoder/scripts/accelerate_launcher.sh \
 --num_machines 32 \
 $WORK/tetraencoder/tetraencoder/train.py \
 --model_name_or_path $WORK/tetraencoder/all-mpnet-base-v2 \
---kelm_file $WORK/tetraencoder/datasets/KELM/clean_kelm.jsonl \
---tekgen_file $WORK/tetraencoder/datasets/TEKGEN/processed-tekgen-train.jsonl \
 --trex_file $WORK/tetraencoder/datasets/TREx/trex_graphs.jsonl \
 --train_batch_size 20 \
 --hard_negatives \
@@ -43,6 +41,6 @@ $WORK/tetraencoder/tetraencoder/train.py \
 --checkpoint_save_steps 1000 \
 --max_seq_length 384 \
 --wandb \
---run_name all_datasets_bs2560_hard_neg \
+--run_name trex_bs2560_hard_neg \
 --find_unused_parameters
 wait
