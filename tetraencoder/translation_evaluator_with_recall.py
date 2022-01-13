@@ -5,6 +5,7 @@ from typing import List, Union, Tuple
 
 import numpy as np
 import torch
+from accelerate import Accelerator
 from sentence_transformers.evaluation import SentenceEvaluator
 from sentence_transformers.util import pytorch_cos_sim
 
@@ -30,7 +31,7 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
                  write_csv: bool = True,
                  mrr_ks: List[int] = None,
                  recall_ks: List[int] = None,
-                 reverse_eval=False):
+                 reverse_eval: bool = False):
         """
         Constructs an evaluator based for the dataset
 
@@ -89,37 +90,47 @@ class TranslationEvaluatorWithRecall(SentenceEvaluator):
         tgt2src_mrr_scores = []
         cos_sims = all_sims(self.source_sentences, self.target_sentences,
                             model, batch_size=self.batch_size).detach().cpu().numpy()
-        max_idxes_per_k = {k: np.argpartition(cos_sims, -k, axis=1)[:, -k:] for k in self.all_ks}
-        for k in self.recall_ks:
-            src2tgt_recall_scores.append(self.recall_at_k(k, max_idxes_per_k[k], cos_sims,
-                                                          verbose=self.print_wrong_matches and k == 1))
-        for k in self.mrr_ks:
-            src2tgt_mrr_scores.append(self.mrr_at_k(k, max_idxes_per_k[k], cos_sims))
-        acc_src2trg = src2tgt_recall_scores[0]
-        logger.info("Accuracy src2trg: {:.2f}".format(acc_src2trg * 100))
-
-        if self.reverse_eval:
-            cos_sims = cos_sims.T
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             max_idxes_per_k = {k: np.argpartition(cos_sims, -k, axis=1)[:, -k:] for k in self.all_ks}
+
             for k in self.recall_ks:
-                tgt2src_recall_scores.append(self.recall_at_k(k, max_idxes_per_k[k], cos_sims))
+                src2tgt_recall_scores.append(self.recall_at_k(k, max_idxes_per_k[k], cos_sims,
+                                                              verbose=self.print_wrong_matches and k == 1))
             for k in self.mrr_ks:
-                tgt2src_mrr_scores.append(self.mrr_at_k(k, max_idxes_per_k[k], cos_sims))
-            acc_trg2src = tgt2src_recall_scores[0]
-            logger.info("Accuracy trg2src: {:.2f}".format(acc_trg2src * 100))
+                src2tgt_mrr_scores.append(self.mrr_at_k(k, max_idxes_per_k[k], cos_sims))
+            acc_src2trg = src2tgt_recall_scores[0]
+            logger.info("Accuracy src2trg: {:.2f}".format(acc_src2trg * 100))
 
-        outputs = src2tgt_recall_scores + src2tgt_mrr_scores + tgt2src_recall_scores + tgt2src_mrr_scores
-        assert len(outputs) == len(self.output_names), \
-            f"Mismatched output length {len(outputs)} and expected output length {len(self.output_names)}"
+            if self.reverse_eval:
+                cos_sims = cos_sims.T
+                max_idxes_per_k = {k: np.argpartition(cos_sims, -k, axis=1)[:, -k:] for k in self.all_ks}
+                for k in self.recall_ks:
+                    tgt2src_recall_scores.append(self.recall_at_k(k, max_idxes_per_k[k], cos_sims))
+                for k in self.mrr_ks:
+                    tgt2src_mrr_scores.append(self.mrr_at_k(k, max_idxes_per_k[k], cos_sims))
 
-        if output_path is not None and self.write_csv and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
-            csv_path = os.path.join(output_path, self.csv_file)
-            output_file_exists = os.path.isfile(csv_path)
-            with open(csv_path, newline='', mode="a" if output_file_exists else 'w', encoding="utf-8") as f:
-                writer = csv.writer(f)
-                if not output_file_exists:
-                    writer.writerow(self.csv_headers)
-                writer.writerow([epoch, steps] + outputs)
+            outputs = src2tgt_recall_scores + src2tgt_mrr_scores + tgt2src_recall_scores + tgt2src_mrr_scores
+            assert len(outputs) == len(self.output_names), \
+                f"Mismatched output length {len(outputs)} and expected output length {len(self.output_names)}"
+
+            if output_path is not None and self.write_csv:
+                csv_path = os.path.join(output_path, self.csv_file)
+                output_file_exists = os.path.isfile(csv_path)
+                with open(csv_path, newline='', mode="a" if output_file_exists else 'w', encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    if not output_file_exists:
+                        writer.writerow(self.csv_headers)
+                    writer.writerow([epoch, steps] + outputs)
+
+        if torch.distributed.is_initialized():
+            if torch.distributed.get_rank() != 0:
+                tensor_outs = torch.zeros(len(self.output_names), device="cuda")
+            else:
+                tensor_outs = torch.tensor(outputs, device="cuda")
+            torch.distributed.barrier()
+            torch.distributed.all_reduce(tensor_outs, op=torch.distributed.ReduceOp.SUM)
+            outputs = tensor_outs.cpu().numpy()
+            acc_src2trg = outputs[0]
 
         if return_all_scores:
             return acc_src2trg, {self.output_names[i]: outputs[i] for i in range(len(outputs))}
