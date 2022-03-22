@@ -33,10 +33,10 @@ if __name__ == "__main__":
         raise NotImplementedError("you must pass a dataset!")
     if args.subset:
         out_path = out_path + f".subset{args.subset}"
-        dataset = dataset.shuffle(seed=1066)
-        dataset = dataset.select(range(args.subset))
+        dataset.shuffle(seed=1066)
+        dataset.select(range(args.subset))
     set_start_method("spawn")
-    dataset = dataset.map(
+    dataset.map(
         partial(pair_sims_datasets_map, model=model, text_key=text_key, rdf_key=rdf_key, batch_size=args.batch_size),
         batched=True, batch_size=args.batch_size, with_rank=True, num_proc=2)
     dataset.to_json(out_path)
