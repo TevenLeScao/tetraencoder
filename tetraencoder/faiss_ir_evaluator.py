@@ -15,48 +15,71 @@ from torch.nn import functional as F
 from util import normalized
 
 logger = logging.getLogger(__name__)
+event = None
 
 
-def embed_chunk(rank, model, corpus_chunk, batch_size, normalize, queue: mp.Queue):
+def embed_chunk(rank, model, corpus_chunk, batch_size, normalize, queue: mp.Queue, stop_signal: mp.Event):
     # The first (hence the +1 and -1) GPU is reserved for the index
-    device = f"cuda:{rank % (torch.cuda.device_count() - 1) + 1}"
+    device_rank = rank % (torch.cuda.device_count() - 1) + 1
+    device = f"cuda:{device_rank}"
     model = model.to(device)
 
-    for batch in tqdm([corpus_chunk[start: start + batch_size] for start in range(0, len(corpus_chunk), batch_size)]):
+    for batch in tqdm([corpus_chunk[start: start + batch_size] for start in range(0, len(corpus_chunk), batch_size)], desc=f"GPU {device_rank} chunks"):
         embeddings = model.encode(batch, show_progress_bar=False, convert_to_numpy=False, convert_to_tensor=True, batch_size=batch_size, device=device)
         if normalize:
             embeddings = F.normalize(embeddings, p=2, dim=-1)
         queue.put(embeddings)
 
     # Signal we are done
-    queue.put_nowait(None)
+    queue.put(None)
 
-    sleep(500)
+    stop_signal.wait()
 
 
-def add_chunk_to_index(index: faiss.Index, queue: mp.Queue, index_training_samples, num_workers, device=0):
+def add_chunk_to_index(index: faiss.Index, queue: mp.Queue, index_training_samples, num_workers, pca_dims=None, device=0, logging_interval=1000, corpus_size=-1):
     none_count = 0
+    seen_examples = 0
+    seen_chunks = 0
     initial_training_embeddings = []
-    while True:
-        embeddings = queue.get()
-        if embeddings is not None:
-            embeddings = embeddings.to(f"cuda:{device}")
-            if index.is_trained:
-                index.add(embeddings)
-            else:
-                initial_training_embeddings.append(embeddings)
-                if sum([initial_chunk.shape[0] for initial_chunk in initial_training_embeddings]) > index_training_samples:
-                    start = time()
-                    print("training index")
-                    training_data = torch.cat(initial_training_embeddings)
-                    index.train(training_data)
-                    print(f"index trained in {time() - start}s")
+    start_time = time()
+
+    # identity for now, will change later if `pca_dims != None`
+    pca = lambda embeddings: embeddings
+
+    with tqdm(total=corpus_size, desc="Index adds") as pbar:
+        while True:
+            embeddings = queue.get()
+            if embeddings is not None:
+                seen_examples += embeddings.shape[0]
+                seen_chunks += 1
+                pbar.update(1)
+
+                if logging_interval > 0 and seen_chunks % logging_interval == 0:
+                    print(f"{seen_examples} examples out of {corpus_size} seen in {time() - start_time:.2f}s")
+
+                embeddings = embeddings.to(f"cuda:{device}")
+                if index.is_trained:
+                    index.add(pca(embeddings))
                 else:
-                    continue
-        else:
-            none_count += 1
-        if none_count == num_workers:
-            break
+                    initial_training_embeddings.append(embeddings)
+                    if seen_examples > index_training_samples:
+                        print("training index")
+                        training_data = torch.cat(initial_training_embeddings)
+
+                        if pca_dims is not None:
+                            U, S, V = torch.pca_lowrank(training_data, q=pca_dims)
+                            pca = lambda embeddings: torch.matmul(embeddings, V)
+
+                        training_data = pca(training_data)
+                        index.train(training_data)
+                        print(f"index trained in {time() - start_time}s")
+                    else:
+                        continue
+            else:
+                none_count += 1
+            if none_count == num_workers:
+                print(f"Index built in {time() - start_time}")
+                break
 
 
 class FaissIREvaluator(SentenceEvaluator):
@@ -74,12 +97,13 @@ class FaissIREvaluator(SentenceEvaluator):
                  index_training_samples: int = 40*4096,
                  index_nlist: int = 100,
                  index_nprobe: int = 5,
-                 index_factory_string: str = "IVF4096,Flat",
+                 index_factory_string: str = "IVF4096,SQfp16", # IVF4096,Flat
+                 pca_dims: int = 128,
                  mrr_at_k: List[int] = [10],
                  ndcg_at_k: List[int] = [10],
                  accuracy_at_k: List[int] = [1, 3, 5, 10],
                  precision_recall_at_k: List[int] = [1, 3, 5, 10],
-                 map_at_k: List[int] = [100],
+                 map_at_k: List[int] = [10],
                  show_progress_bar: bool = False,
                  corpus_chunk_size: int = 50000,
                  batch_size: int = 32,
@@ -87,7 +111,6 @@ class FaissIREvaluator(SentenceEvaluator):
                  name: str = '',
                  write_csv: bool = True,
                  score_function: str = 'cos_sim',       #Score function, higher=more similar
-                 num_proc=None
                  ):
 
         self.queries_ids = []
@@ -104,6 +127,7 @@ class FaissIREvaluator(SentenceEvaluator):
         self.index_nlist = index_nlist
         self.index_nprobe = index_nprobe
         self.index_factory_string = index_factory_string
+        self.pca_dims = pca_dims
 
         self.relevant_docs = relevant_docs
         self.corpus_chunk_size = corpus_chunk_size
@@ -198,16 +222,20 @@ class FaissIREvaluator(SentenceEvaluator):
         else:
             return main_score
 
-    def compute_metrices(self, model, corpus_model=None, num_proc: int = None) -> Dict[str, float]:
+    def compute_metrices(self, model, corpus_model=None, num_proc: int = None):
 
         gpu_mp = mp.get_context("spawn")
         queue = gpu_mp.Queue()
+        stop_signal = gpu_mp.Event()
         max_k = max(max(self.mrr_at_k), max(self.ndcg_at_k), max(self.accuracy_at_k), max(self.precision_recall_at_k), max(self.map_at_k))
 
         if corpus_model is None:
             corpus_model = model
 
-        d = model.encode(self.queries[0]).shape[-1]  # dimension
+        if self.pca_dims is None:
+            d = model.encode(self.queries[0]).shape[-1]  # dimension
+        else:
+            d = self.pca_dims
         nc = len(self.corpus)  # corpus size
         assert nc >= self.index_training_samples, f"corpus size {nc} is smaller than necessary training samples {self.index_training_samples}"
         nq = len(self.queries)  # nb of queries
@@ -215,9 +243,10 @@ class FaissIREvaluator(SentenceEvaluator):
         # quantizer = faiss.IndexFlatL2(d)  # the other
         # metric = faiss.METRIC_L2
         # index = faiss.IndexIVFFlat(quantizer, d, self.index_nlist, metric)
+        index_device_rank = 0
         index = faiss.index_factory(d, self.index_factory_string)
         res = faiss.StandardGpuResources()  # use a single GPU
-        index = faiss.index_cpu_to_gpu(res, 0, index)
+        index = faiss.index_cpu_to_gpu(res, index_device_rank, index)
         index.nprobe = self.index_nprobe
 
         # consumer = gpu_mp.Process(target=add_chunk_to_index, args=(index, queue, self.index_training_samples, num_proc))
@@ -232,39 +261,22 @@ class FaissIREvaluator(SentenceEvaluator):
         for rank in range(num_proc - 1):
             corpus_chunk = [self.corpus[idx] for idx in chunk_idxes[rank]]
             process = gpu_mp.Process(target=embed_chunk,
-                              kwargs={"rank": rank, "model": model, "corpus_chunk": corpus_chunk,
+                              kwargs={"rank": rank, "model": corpus_model, "corpus_chunk": corpus_chunk,
                                       "batch_size": self.batch_size, "normalize": self.score_function == "cos_sim",
-                                      "queue": queue})
+                                      "queue": queue, "stop_signal": stop_signal})
 
             processes.append(process)
             process.start()
 
-        add_chunk_to_index(index, queue, self.index_training_samples, num_proc)
+        add_chunk_to_index(index, queue, self.index_training_samples, num_proc - 1, pca_dims=self.pca_dims, corpus_size=nc // self.batch_size, device=index_device_rank)
 
+        stop_signal.set()
         for process in processes:
             process.join()
 
-
-        # Compute embedding for the queries and corpus on every GPU, then only retrieve them in the first process.
-        # random_index = list(range(nc))
-        # random.shuffle(random_index)
-        # batch_idxes = [random_index[i: i + self.corpus_chunk_size] for i in
-        #                range(0, nc, self.corpus_chunk_size)]
-        # for chunk_idxes in tqdm(batch_idxes, desc='Corpus Chunks', disable=not self.show_progress_bar):
-        #     chunk_embeddings = corpus_model.encode([self.corpus[idx] for idx in chunk_idxes], show_progress_bar=self.show_progress_bar,
-        #                                             batch_size=self.batch_size, convert_to_tensor=True)
-        #     corpus_embeddings = chunk_embeddings.cpu().detach().numpy().astype('float32')
-        #     start_time = time
-        #     if self.score_function == "cos_sim":
-        #         corpus_embeddings = normalized(corpus_embeddings, axis=-1)
-        #     if not index.is_trained:
-        #         index.train(corpus_embeddings)
-        #         print(f"index trained in {time() - start_time}")
-        #     index.add(corpus_embeddings)
-
         query_embeddings = model.encode(self.queries, show_progress_bar=self.show_progress_bar,
-                                        batch_size=self.batch_size, convert_to_tensor=True, num_proc=num_proc)
-        query_embeddings = query_embeddings.cpu().detach().numpy().astype('float32')
+                                        batch_size=self.batch_size, convert_to_numpy=True, num_proc=num_proc, multiprocessing_devices=list(range(1, torch.cuda.device_count())))
+        # query_embeddings = query_embeddings.astype('float32')
         if self.score_function == "cos_sim":
             query_embeddings = normalized(query_embeddings, axis=1)
 
@@ -273,13 +285,13 @@ class FaissIREvaluator(SentenceEvaluator):
         for i in range(0, nq, self.batch_size):
             query_batch = query_embeddings[i:i+self.batch_size]
             scores, neighbours = index.search(query_batch, max_k)
-            queries_result_list.extend([[{"corpus_id": corpus_id, "score": score}] for j in range(len(query_batch)) for corpus_id, score in zip(neighbours[j], scores[j])])
+            queries_result_list.extend([[{"corpus_id": corpus_id, "score": score} for corpus_id, score in zip(neighbours[j], scores[j])] for j in range(len(query_batch))])
 
         logger.info("Queries: {}".format(nq))
         logger.info("Corpus: {}\n".format(nc))
 
         #Compute scores
-        scores = {self.score_function: self.scores_from_results(queries_result_list)}
+        scores = self.scores_from_results(queries_result_list)
 
         #Output
         logger.info("Score-Function: {}".format(self.score_function))
@@ -288,74 +300,7 @@ class FaissIREvaluator(SentenceEvaluator):
         return scores
 
     def compute_metrices_distributed(self, model, corpus_model=None, num_proc: int = None) -> Dict[str, float]:
-
-        rank = torch.distributed.get_rank()
-        max_k = max(max(self.mrr_at_k), max(self.ndcg_at_k), max(self.accuracy_at_k), max(self.precision_recall_at_k), max(self.map_at_k))
-        nc = len(self.corpus)  # corpus size
-        nq = len(self.queries)  # nb of queries
-
-        if corpus_model is None:
-            corpus_model = model
-
-        if rank == 0:
-            d = model.encode(self.queries[0]).shape[-1]  # dimension
-            np.random.seed(1234)  # make reproducible
-            # quantizer = faiss.IndexFlatL2(d)  # the other
-            # metric = faiss.METRIC_L2
-            # index = faiss.IndexIVFFlat(quantizer, d, self.index_nlist, metric)
-            index = faiss.index_factory(d, f"PCA{d/4},IVF131072_HNSW32,Flat")
-            index.nprobe = self.index_nprobe
-        else:
-            index = None
-
-        torch.distributed.barrier()
-
-        # Compute embedding for the queries and corpus on every GPU, then only retrieve them in the first process.
-        random_index = list(range(nc))
-        random.shuffle(random_index)
-        batch_idxes = [random_index[i: i + self.corpus_chunk_size] for i in
-                       range(0, nc, self.corpus_chunk_size)]
-        for chunk_idxes in tqdm(batch_idxes, desc='Corpus Chunks', disable=not self.show_progress_bar):
-            chunk_embeddings = corpus_model.encode([self.corpus[idx] for idx in chunk_idxes], show_progress_bar=self.show_progress_bar,
-                                                    batch_size=self.batch_size, convert_to_tensor=True)
-            if rank == 0:
-                corpus_embeddings = chunk_embeddings.cpu().detach().numpy().astype('float32')
-                start_time = time
-                if self.score_function == "cos_sim":
-                    corpus_embeddings = normalized(corpus_embeddings, axis=-1)
-                if not index.is_trained:
-                    index.train(corpus_embeddings)
-                    print(f"index trained in {time() - start_time}")
-                index.add(corpus_embeddings)
-            torch.distributed.barrier()
-
-        query_embeddings = model.encode(self.queries, show_progress_bar=self.show_progress_bar,
-                                        batch_size=self.batch_size, convert_to_tensor=True, num_proc=num_proc)
-        if rank == 0:
-            query_embeddings = query_embeddings.cpu().detach().numpy().astype('float32')
-            if self.score_function == "cos_sim":
-                query_embeddings = normalized(query_embeddings, axis=1)
-
-            # now let's search!
-            queries_result_list = []
-            for i in range(0, nq, self.batch_size):
-                query_batch = query_embeddings[i:i+self.batch_size]
-                scores, neighbours = index.search(query_batch, max_k)
-                queries_result_list.extend([[{"corpus_id": corpus_id, "score": score}] for j in range(len(query_batch)) for corpus_id, score in zip(neighbours[j], scores[j])])
-
-            logger.info("Queries: {}".format(nq))
-            logger.info("Corpus: {}\n".format(nc))
-
-            #Compute scores
-            scores = {self.score_function: self.scores_from_results(queries_result_list)}
-
-            #Output
-            logger.info("Score-Function: {}".format(self.score_function))
-            self.output_scores(scores)
-
-        torch.distributed.barrier()
-
-        return scores
+        raise NotImplementedError
 
     def scores_from_results(self, queries_result_list: List[object]):
         # Init score computation values
@@ -444,13 +389,13 @@ class FaissIREvaluator(SentenceEvaluator):
 
     def output_scores(self, scores):
         for k in scores['accuracy@k']:
-            logger.info("Accuracy@{}: {:.2f}%".format(k, scores['accuracy@k'][k]*100))
+            logger.info("accuracy@{}: {:.2f}%".format(k, scores['accuracy@k'][k]*100))
 
         for k in scores['precision@k']:
-            logger.info("Precision@{}: {:.2f}%".format(k, scores['precision@k'][k]*100))
+            logger.info("precision@{}: {:.2f}%".format(k, scores['precision@k'][k]*100))
 
         for k in scores['recall@k']:
-            logger.info("Recall@{}: {:.2f}%".format(k, scores['recall@k'][k]*100))
+            logger.info("recall@{}: {:.2f}%".format(k, scores['recall@k'][k]*100))
 
         for k in scores['mrr@k']:
             logger.info("MRR@{}: {:.4f}".format(k, scores['mrr@k'][k]))

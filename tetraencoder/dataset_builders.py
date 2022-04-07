@@ -180,7 +180,7 @@ class TekgenDataset(InputExampleDataset):
         return self.dataset["text"]
 
 
-class WebNlgWikidataDataset(InputExampleDataset):
+class WebNlgDataset(InputExampleDataset):
     def __init__(self, data_file, seed=1951):
         super().__init__()
         self.data_file = data_file

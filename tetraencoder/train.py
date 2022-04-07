@@ -12,6 +12,7 @@ from sentence_transformers import SentenceTransformer, losses
 from sentence_transformers.evaluation import TranslationEvaluator, SequentialEvaluator, InformationRetrievalEvaluator
 from sentence_transformers.util import cos_sim
 
+from faiss_ir_evaluator import FaissIREvaluator
 from translation_evaluator_with_recall import TranslationEvaluatorWithRecall
 from torch.utils.data import DataLoader
 
@@ -46,10 +47,12 @@ if __name__ == "__main__":
         parser.add_argument(f"--{dataset_name}_file", default=None, type=str)
     # evaluation dataset args
     parser.add_argument("--eval_webnlg_wikidata_file", default=None, type=str)
+    parser.add_argument("--eval_webnlg_dbpedia_file", default=None, type=str)
     parser.add_argument("--eval_gooaq_file", default=None, type=str)
     parser.add_argument("--eval_sq_file", default=None, type=str)
     parser.add_argument("--eval_mpww_file", default=None, type=str)
     parser.add_argument("--eval_mpww_passages_file", default=None, type=str)
+    parser.add_argument("--eval_corpus_chunk_size", default=16384, type=int)
     # instrumentation
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run_name", default=None, type=str)
@@ -106,12 +109,21 @@ if __name__ == "__main__":
     task_names = []
     if args.eval_webnlg_wikidata_file is not None:
         print("adding WebNLG eval data")
-        eval_webnlg_dataset = WebNlgWikidataDataset(args.eval_webnlg_wikidata_file)
+        eval_webnlg_dataset = WebNlgDataset(args.eval_webnlg_wikidata_file)
         evaluators.append(
             TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(),
                                            show_progress_bar=False,
                                            batch_size=args.eval_batch_size_per_gpu))
         task_names.append("WebNLG")
+
+    if args.eval_webnlg_dbpedia_file is not None:
+        print("adding WebNLG-DB eval data")
+        eval_webnlg_dataset = WebNlgDataset(args.eval_webnlg_dbpedia_file)
+        evaluators.append(
+            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(),
+                                           show_progress_bar=False,
+                                           batch_size=args.eval_batch_size_per_gpu))
+        task_names.append("WebNLG-DB")
 
     if args.eval_gooaq_file is not None:
         print("adding GOOAQ eval data")
@@ -142,13 +154,15 @@ if __name__ == "__main__":
         if args.eval_mpww_passages_file is not None:
             queries = {i: query for i, query in enumerate(mpww.rdfs())}
             print("adding MPWW passages corpus eval data")
+            print("adding MPWW passages corpus eval data")
             passages = load_dataset("csv", data_files=args.eval_mpww_passages_file)["train"]
             corpus = {i: passage for i, passage in enumerate(passages["text"])}
             relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
             evaluators.append(
-                InformationRetrievalEvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
-                                              corpus_chunk_size=args.eval_batch_size_per_gpu*16, precision_recall_at_k=[10],
-                                              accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu, score_functions={'cos_sim': cos_sim}))
+                FaissIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
+                                 corpus_chunk_size=args.eval_corpus_chunk_size, precision_recall_at_k=[10],
+                                 accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
+                                 score_function='cos_sim', index_training_samples=4096))
             task_names.append("MPWW_fullIR")
         else:
             evaluators.append(
@@ -187,9 +201,11 @@ if __name__ == "__main__":
         def eval_callback(scores, epoch, steps):
             for i, task_name in enumerate(task_names):
                 if task_name == "MPWW":
-                    wandb.log({f"{task_name}_accuracy@1": scores[i]["cos_sim"]["accuracy@k"][1], "training_steps": steps})
+                    wandb.log(
+                        {f"{task_name}_accuracy@1": scores[i]["cos_sim"]["accuracy@k"][1], "training_steps": steps})
                     wandb.log({f"{task_name}_recall@10": scores[i]["cos_sim"]["recall@k"][10], "training_steps": steps})
-                    wandb.log({f"{task_name}_precision@10": scores[i]["cos_sim"]["precision@k"][10], "training_steps": steps})
+                    wandb.log(
+                        {f"{task_name}_precision@10": scores[i]["cos_sim"]["precision@k"][10], "training_steps": steps})
                     wandb.log({f"{task_name}_MRR@10": scores[i]["cos_sim"]["mrr@k"][10], "training_steps": steps})
                 else:
                     wandb.log({f"{task_name}_recall@1": scores[i]["recall@1_src2tgt"], "training_steps": steps})
@@ -227,25 +243,37 @@ if __name__ == "__main__":
     else:
         # trying to infer to which step went the model we're evaluating
         try:
+            # reloading an existing model
             training_step = int(args.model_name_or_path.split("/")[-1])
+            eval_path = os.path.join(args.model_name_or_path, "eval_out_of_training")
+            os.makedirs(eval_path, exist_ok=True)
         except ValueError:
+            # loading one from the hub
             training_step = -1
+            eval_path = os.path.join(name, "eval_out_of_training")
+            os.makedirs(eval_path, exist_ok=True)
 
         # evaluating
-        eval_path = os.path.join(args.model_name_or_path, "eval_out_of_training")
-        os.makedirs(eval_path, exist_ok=True)
-        main_score, scores = sequential_evaluator(model, output_path=eval_path, steps=training_step, epoch=1, return_all_scores=True)
+        for evaluator in sequential_evaluator.evaluators:
+            evaluator.show_progress_bar = True
+        main_score, scores = sequential_evaluator(model, output_path=eval_path, steps=training_step, epoch=1,
+                                                  return_all_scores=True)
 
         # logging
         if args.wandb and accelerator.is_main_process:
             for i, task_name in enumerate(task_names):
                 if task_name == "MPWW":
-                    wandb.log({f"{task_name}_accuracy@1": scores[i]["cos_sim"]["accuracy@k"][1], "training_steps": training_step})
-                    wandb.log({f"{task_name}_recall@10": scores[i]["cos_sim"]["recall@k"][10], "training_steps": training_step})
+                    wandb.log({f"{task_name}_accuracy@1": scores[i]["cos_sim"]["accuracy@k"][1],
+                               "training_steps": training_step})
+                    wandb.log({f"{task_name}_recall@10": scores[i]["cos_sim"]["recall@k"][10],
+                               "training_steps": training_step})
                     wandb.log(
-                        {f"{task_name}_precision@10": scores[i]["cos_sim"]["precision@k"][10], "training_steps": training_step})
-                    wandb.log({f"{task_name}_MRR@10": scores[i]["cos_sim"]["mrr@k"][10], "training_steps": training_step})
+                        {f"{task_name}_precision@10": scores[i]["cos_sim"]["precision@k"][10],
+                         "training_steps": training_step})
+                    wandb.log(
+                        {f"{task_name}_MRR@10": scores[i]["cos_sim"]["mrr@k"][10], "training_steps": training_step})
                 else:
                     wandb.log({f"{task_name}_recall@1": scores[i]["recall@1_src2tgt"], "training_steps": training_step})
-                    wandb.log({f"{task_name}_recall@10": scores[i]["recall@10_src2tgt"], "training_steps": training_step})
+                    wandb.log(
+                        {f"{task_name}_recall@10": scores[i]["recall@10_src2tgt"], "training_steps": training_step})
                     wandb.log({f"{task_name}_MRR@10": scores[i]["mrr@10_src2tgt"], "training_steps": training_step})
