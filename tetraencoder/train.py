@@ -21,6 +21,79 @@ from dataset_builders import *
 dataset_builders = {"msmarco": MsMarcoDataset, "kelm": KelmDataset, "gooaq": GooAqDataset, "tekgen": TekgenDataset,
                     "trex": TRexDataset}
 
+
+def build_evaluators(args):    # Create evaluators
+    evaluators = []
+    task_names = []
+    if args.eval_webnlg_wikidata_file is not None:
+        print("adding WebNLG eval data")
+        eval_webnlg_dataset = WebNlgDataset(args.eval_webnlg_wikidata_file)
+        evaluators.append(
+            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(),
+                                           show_progress_bar=False,
+                                           batch_size=args.eval_batch_size_per_gpu))
+        task_names.append("WebNLG")
+
+    if args.eval_webnlg_dbpedia_file is not None:
+        print("adding WebNLG-DB eval data")
+        eval_webnlg_dataset = WebNlgDataset(args.eval_webnlg_dbpedia_file)
+        evaluators.append(
+            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(),
+                                           show_progress_bar=False,
+                                           batch_size=args.eval_batch_size_per_gpu))
+        task_names.append("WebNLG-DB")
+
+    if args.eval_gooaq_file is not None:
+        print("adding GOOAQ eval data")
+        eval_gooaq_dataset = GooAqDataset(args.eval_gooaq_file)
+        evaluators.append(
+            TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(),
+                                           show_progress_bar=False,
+                                           batch_size=args.eval_batch_size_per_gpu))
+        task_names.append("GOOAQ")
+
+    if args.eval_sq_file is not None:
+        print("adding SQ eval data")
+        eval_sq_dataset = SQDataset(args.eval_sq_file)
+        evaluators.append(
+            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=False), eval_sq_dataset.questions(),
+                                           show_progress_bar=False,
+                                           batch_size=args.eval_batch_size_per_gpu))
+        task_names.append("SQ_full_triplet")
+
+    if args.eval_mpww_file is not None:
+        print("adding MPWW queries eval data")
+        mpww = MPWWDataset(args.eval_mpww_file)
+        if args.eval_mpww_passages_file is not None:
+            queries = {i: query for i, query in enumerate(mpww.rdfs())}
+            print("adding MPWW passages corpus eval data")
+            print("adding MPWW passages corpus eval data")
+            passages = load_dataset("csv", data_files=args.eval_mpww_passages_file)["train"]
+            corpus = {i: passage for i, passage in enumerate(passages["text"])}
+            relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
+            evaluators.append(
+                FaissIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
+                                 corpus_chunk_size=args.eval_corpus_chunk_size, precision_recall_at_k=[10],
+                                 accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
+                                 score_function='cos_sim', index_training_samples=4096))
+            task_names.append("MPWW_fullIR")
+        else:
+            evaluators.append(
+                TranslationEvaluatorWithRecall(mpww.rdfs(), mpww.sentences(),
+                                               show_progress_bar=False,
+                                               batch_size=args.eval_batch_size_per_gpu))
+            task_names.append("MPWW_partial")
+    else:
+        assert args.eval_mpww_file is None
+
+    if len(evaluators) == 0:
+        sequential_evaluator = None
+    else:
+        sequential_evaluator = SequentialEvaluator(evaluators, main_score_function=lambda scores: scores[0])
+
+    return sequential_evaluator, task_names
+
+
 if __name__ == "__main__":
 
     random.seed(0)
@@ -105,78 +178,7 @@ if __name__ == "__main__":
         print(f"added {dataset_name} to the corpus in {time() - start_time:.3f}s")
 
     # Create evaluators
-    evaluators = []
-    task_names = []
-    if args.eval_webnlg_wikidata_file is not None:
-        print("adding WebNLG eval data")
-        eval_webnlg_dataset = WebNlgDataset(args.eval_webnlg_wikidata_file)
-        evaluators.append(
-            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(),
-                                           show_progress_bar=False,
-                                           batch_size=args.eval_batch_size_per_gpu))
-        task_names.append("WebNLG")
-
-    if args.eval_webnlg_dbpedia_file is not None:
-        print("adding WebNLG-DB eval data")
-        eval_webnlg_dataset = WebNlgDataset(args.eval_webnlg_dbpedia_file)
-        evaluators.append(
-            TranslationEvaluatorWithRecall(eval_webnlg_dataset.rdfs(), eval_webnlg_dataset.sentences(),
-                                           show_progress_bar=False,
-                                           batch_size=args.eval_batch_size_per_gpu))
-        task_names.append("WebNLG-DB")
-
-    if args.eval_gooaq_file is not None:
-        print("adding GOOAQ eval data")
-        eval_gooaq_dataset = GooAqDataset(args.eval_gooaq_file)
-        evaluators.append(
-            TranslationEvaluatorWithRecall(eval_gooaq_dataset.answers(), eval_gooaq_dataset.questions(),
-                                           show_progress_bar=False,
-                                           batch_size=args.eval_batch_size_per_gpu))
-        task_names.append("GOOAQ")
-
-    if args.eval_sq_file is not None:
-        print("adding SQ eval data")
-        eval_sq_dataset = SQDataset(args.eval_sq_file)
-        evaluators.append(
-            TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=False), eval_sq_dataset.questions(),
-                                           show_progress_bar=False,
-                                           batch_size=args.eval_batch_size_per_gpu))
-        task_names.append("SQ_full_triplet")
-        # evaluators.append(
-        #     TranslationEvaluatorWithRecall(eval_sq_dataset.rdfs(incomplete=True), eval_sq_dataset.questions(),
-        #                                    show_progress_bar=False,
-        #                                    batch_size=args.eval_batch_size_per_gpu))
-        # task_names.append("SQ_incomplete_triplet")
-
-    if args.eval_mpww_file is not None:
-        print("adding MPWW queries eval data")
-        mpww = MPWWDataset(args.eval_mpww_file)
-        if args.eval_mpww_passages_file is not None:
-            queries = {i: query for i, query in enumerate(mpww.rdfs())}
-            print("adding MPWW passages corpus eval data")
-            print("adding MPWW passages corpus eval data")
-            passages = load_dataset("csv", data_files=args.eval_mpww_passages_file)["train"]
-            corpus = {i: passage for i, passage in enumerate(passages["text"])}
-            relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
-            evaluators.append(
-                FaissIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
-                                 corpus_chunk_size=args.eval_corpus_chunk_size, precision_recall_at_k=[10],
-                                 accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
-                                 score_function='cos_sim', index_training_samples=4096))
-            task_names.append("MPWW_fullIR")
-        else:
-            evaluators.append(
-                TranslationEvaluatorWithRecall(mpww.rdfs(), mpww.sentences(),
-                                               show_progress_bar=False,
-                                               batch_size=args.eval_batch_size_per_gpu))
-            task_names.append("MPWW_partial")
-    else:
-        assert args.eval_mpww_file is None
-
-    if len(evaluators) == 0:
-        sequential_evaluator = None
-    else:
-        sequential_evaluator = SequentialEvaluator(evaluators, main_score_function=lambda scores: scores[0])
+    sequential_evaluator, task_names = build_evaluators(args)
 
     if args.wandb and accelerator.is_main_process:
 
