@@ -89,16 +89,20 @@ if __name__ == "__main__":
     accelerator = Accelerator()
     sequential_evaluator, task_names = build_evaluators(args)
 
-    train_datasets, batch_size, neg_type = args.run_name.split("_")
-    train_datasets = ["kelm", "tekgen", "trex"] if train_datasets == "all" else [train_datasets]
-    batch_size = int(batch_size[2:])
-    neg_type = neg_type[:-3]
+    try:
+        train_datasets, batch_size, neg_type = args.run_name.split("_")
+        train_datasets = ["kelm", "tekgen", "trex"] if train_datasets == "all" else [train_datasets]
+        batch_size = int(batch_size[2:])
+        neg_type = neg_type[:-3]
+    except ValueError:
+        train_datasets = []
+        batch_size = 0
+        neg_type = None
 
     if args.wandb and accelerator.is_main_process:
         import wandb
         wandb.init(project="rdf-embeddings-evals", entity="flukeellington", name=args.run_name)
         wandb.config = {
-            "model_name_or_path": args.model_name_or_path,
             "batch_size": batch_size,
             "train_datasets": train_datasets,
             "negatives": neg_type,
