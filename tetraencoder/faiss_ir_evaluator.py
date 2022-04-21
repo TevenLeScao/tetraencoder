@@ -1,85 +1,25 @@
 import logging
 import os
 import random
-from time import time, sleep
+from time import time
 from typing import List, Tuple, Dict, Set, Union
 
 import faiss
 import faiss.contrib.torch_utils
 import numpy as np
 import torch
-from tqdm import tqdm
+
+torch.multiprocessing.set_sharing_strategy('file_system')
+from sentence_transformers import SentenceTransformer
 from sentence_transformers.evaluation import SentenceEvaluator
+from tqdm import tqdm
 from torch import multiprocessing as mp
 from torch.nn import functional as F
 from util import normalized
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 event = None
-
-
-def embed_chunk(rank, model, corpus_chunk, batch_size, normalize, queue: mp.Queue, stop_signal: mp.Event):
-    # The first (hence the +1 and -1) GPU is reserved for the index
-    device_rank = rank % (torch.cuda.device_count() - 1) + 1
-    device = f"cuda:{device_rank}"
-    model = model.to(device)
-
-    for batch in tqdm([corpus_chunk[start: start + batch_size] for start in range(0, len(corpus_chunk), batch_size)], desc=f"GPU {device_rank} chunks"):
-        embeddings = model.encode(batch, show_progress_bar=False, convert_to_numpy=False, convert_to_tensor=True, batch_size=batch_size, device=device)
-        if normalize:
-            embeddings = F.normalize(embeddings, p=2, dim=-1)
-        queue.put(embeddings)
-
-    # Signal we are done
-    queue.put(None)
-
-    stop_signal.wait()
-
-
-def add_chunk_to_index(index: faiss.Index, queue: mp.Queue, index_training_samples, num_workers, pca_dims=None, device=0, logging_interval=1000, corpus_size=-1):
-    none_count = 0
-    seen_examples = 0
-    seen_chunks = 0
-    initial_training_embeddings = []
-    start_time = time()
-
-    # identity for now, will change later if `pca_dims != None`
-    pca = lambda embeddings: embeddings
-
-    with tqdm(total=corpus_size, desc="Index adds") as pbar:
-        while True:
-            embeddings = queue.get()
-            if embeddings is not None:
-                seen_examples += embeddings.shape[0]
-                seen_chunks += 1
-                pbar.update(1)
-
-                if logging_interval > 0 and seen_chunks % logging_interval == 0:
-                    print(f"{seen_examples} examples out of {corpus_size} seen in {time() - start_time:.2f}s")
-
-                embeddings = embeddings.to(f"cuda:{device}")
-                if index.is_trained:
-                    index.add(pca(embeddings))
-                else:
-                    initial_training_embeddings.append(embeddings)
-                    if seen_examples > index_training_samples:
-                        print("training index")
-                        training_data = torch.cat(initial_training_embeddings)
-
-                        if pca_dims is not None:
-                            U, S, V = torch.pca_lowrank(training_data, q=pca_dims)
-                            pca = lambda embeddings: torch.matmul(embeddings, V)
-
-                        training_data = pca(training_data)
-                        index.train(training_data)
-                        print(f"index trained in {time() - start_time}s")
-                    else:
-                        continue
-            else:
-                none_count += 1
-            if none_count == num_workers:
-                print(f"Index built in {time() - start_time}")
-                break
 
 
 class FaissIREvaluator(SentenceEvaluator):
@@ -97,8 +37,8 @@ class FaissIREvaluator(SentenceEvaluator):
                  index_training_samples: int = 40*4096,
                  index_nlist: int = 100,
                  index_nprobe: int = 5,
-                 index_factory_string: str = "IVF4096,SQfp16", # IVF4096,Flat
-                 pca_dims: int = 128,
+                 index_factory_string: str = "Flat", # IVF4096,SQfp16
+                 pca_dims: int = 64,
                  mrr_at_k: List[int] = [10],
                  ndcg_at_k: List[int] = [10],
                  accuracy_at_k: List[int] = [1, 3, 5, 10],
@@ -111,6 +51,7 @@ class FaissIREvaluator(SentenceEvaluator):
                  name: str = '',
                  write_csv: bool = True,
                  score_function: str = 'cos_sim',       #Score function, higher=more similar
+                 faiss_gpu: bool = False
                  ):
 
         self.queries_ids = []
@@ -128,6 +69,7 @@ class FaissIREvaluator(SentenceEvaluator):
         self.index_nprobe = index_nprobe
         self.index_factory_string = index_factory_string
         self.pca_dims = pca_dims
+        # identity for now, will change if pca_dims != None
 
         self.relevant_docs = relevant_docs
         self.corpus_chunk_size = corpus_chunk_size
@@ -143,6 +85,7 @@ class FaissIREvaluator(SentenceEvaluator):
         self.name = name
         self.write_csv = write_csv
         self.score_function = score_function
+        self.faiss_gpu = faiss_gpu
 
         if name:
             name = "_" + name
@@ -151,22 +94,23 @@ class FaissIREvaluator(SentenceEvaluator):
         self.csv_headers = ["epoch", "steps"]
 
         for k in accuracy_at_k:
-            self.csv_headers.append("{}-Accuracy@{}".format(score_function, k))
+            self.csv_headers.append("MPWW_accuracy@{}".format(k))
 
         for k in precision_recall_at_k:
-            self.csv_headers.append("{}-Precision@{}".format(score_function, k))
-            self.csv_headers.append("{}-Recall@{}".format(score_function, k))
+            self.csv_headers.append("MPWW_precision@{}".format(k))
+            self.csv_headers.append("MPWW_recall@{}".format(k))
 
         for k in mrr_at_k:
-            self.csv_headers.append("{}-MRR@{}".format(score_function, k))
+            self.csv_headers.append("MPWW_MRR@{}".format(k))
 
         for k in ndcg_at_k:
-            self.csv_headers.append("{}-NDCG@{}".format(score_function, k))
+            self.csv_headers.append("MPWW_NDCG@{}".format(k))
 
         for k in map_at_k:
-            self.csv_headers.append("{}-MAP@{}".format(score_function, k))
+            self.csv_headers.append("MPWW_MAP@{}".format(k))
 
-    def __call__(self, model, output_path: str = None, epoch: int = -1, steps: int = -1, num_proc: int = None, return_all_scores: bool = False, *args, **kwargs) -> Union[float, Tuple[float, dict]]:
+    def __call__(self, model, output_path: str = None, epoch: int = -1, steps: int = -1, num_proc: int = None,
+                 return_all_scores: bool = False, *args, **kwargs) -> Union[float, Tuple[float, dict]]:
 
         if epoch != -1:
             out_txt = " after epoch {}:".format(epoch) if steps == -1 else " in epoch {} after {} steps:".format(epoch, steps)
@@ -175,6 +119,8 @@ class FaissIREvaluator(SentenceEvaluator):
 
         if num_proc is None:
             num_proc = torch.cuda.device_count()
+            if self.faiss_gpu:
+                num_proc -= 1
 
         logger.info("Information Retrieval Evaluation on " + self.name + " dataset" + out_txt)
 
@@ -222,20 +168,24 @@ class FaissIREvaluator(SentenceEvaluator):
         else:
             return main_score
 
-    def compute_metrices(self, model, corpus_model=None, num_proc: int = None):
+    def compute_metrices(self, model: SentenceTransformer, corpus_model: SentenceTransformer = None, num_proc: int = None):
 
         gpu_mp = mp.get_context("spawn")
-        queue = gpu_mp.Queue()
-        stop_signal = gpu_mp.Event()
+        embed_queue = gpu_mp.Queue()
+        producer_stop_signal = gpu_mp.Event()
+        consumer_stop_signal = gpu_mp.Event()
         max_k = max(max(self.mrr_at_k), max(self.ndcg_at_k), max(self.accuracy_at_k), max(self.precision_recall_at_k), max(self.map_at_k))
 
         if corpus_model is None:
             corpus_model = model
 
         if self.pca_dims is None:
+            pca_queue = None
             d = model.encode(self.queries[0]).shape[-1]  # dimension
         else:
+            pca_queue = gpu_mp.Queue()
             d = self.pca_dims
+
         nc = len(self.corpus)  # corpus size
         assert nc >= self.index_training_samples, f"corpus size {nc} is smaller than necessary training samples {self.index_training_samples}"
         nq = len(self.queries)  # nb of queries
@@ -243,54 +193,77 @@ class FaissIREvaluator(SentenceEvaluator):
         # quantizer = faiss.IndexFlatL2(d)  # the other
         # metric = faiss.METRIC_L2
         # index = faiss.IndexIVFFlat(quantizer, d, self.index_nlist, metric)
-        index_device_rank = 0
         index = faiss.index_factory(d, self.index_factory_string)
-        res = faiss.StandardGpuResources()  # use a single GPU
-        index = faiss.index_cpu_to_gpu(res, index_device_rank, index)
+        if self.faiss_gpu:
+            res = faiss.StandardGpuResources()  # use a single GPU
+            index = faiss.index_cpu_to_gpu(res, 0, index)
+            index_device = "cuda:0"
+        else:
+            index_device = "cpu"
         index.nprobe = self.index_nprobe
 
-        # consumer = gpu_mp.Process(target=add_chunk_to_index, args=(index, queue, self.index_training_samples, num_proc))
-        # consumer.start()
-
-        processes = []
+        producers = []
         random_index = list(range(nc))
         random.shuffle(random_index)
-        chunk_size = nc // (num_proc - 1) + 1
+        chunk_size = nc // (num_proc) + 1
         chunk_idxes = [random_index[i * chunk_size:(i + 1) * chunk_size] for i in
-                       range(num_proc - 1)]
-        for rank in range(num_proc - 1):
+                       range(num_proc)]
+
+        print("embedding dataset")
+        for rank in range(num_proc):
             corpus_chunk = [self.corpus[idx] for idx in chunk_idxes[rank]]
-            process = gpu_mp.Process(target=embed_chunk,
+            process = gpu_mp.Process(target=self.embed_chunk,
                               kwargs={"rank": rank, "model": corpus_model, "corpus_chunk": corpus_chunk,
                                       "batch_size": self.batch_size, "normalize": self.score_function == "cos_sim",
-                                      "queue": queue, "stop_signal": stop_signal})
+                                      "queue": embed_queue, "stop_signal": producer_stop_signal})
 
-            processes.append(process)
+            producers.append(process)
             process.start()
 
-        add_chunk_to_index(index, queue, self.index_training_samples, num_proc - 1, pca_dims=self.pca_dims, corpus_size=nc // self.batch_size, device=index_device_rank)
+        print("building index")
 
-        stop_signal.set()
-        for process in processes:
+        consumer = gpu_mp.Process(target=add_chunk_to_index,
+                                  kwargs={"index": index, "embed_queue": embed_queue, "stop_signal": consumer_stop_signal,
+                                          "index_training_samples": self.index_training_samples, "num_proc": num_proc,
+                                          "pca_dims": self.pca_dims, "pca_queue": pca_queue, "device": index_device,
+                                          "corpus_size": nc // self.batch_size})
+        consumer.start()
+        if self.pca_dims is None:
+            # no pca, identity
+            pca = lambda query_batch: query_batch
+        else:
+            V = pca_queue.get().cpu().numpy()
+            pca = lambda query_batch: np.matmul(query_batch, V)
+        consumer_stop_signal.set()
+        consumer.join()
+        producer_stop_signal.set()
+        for process in producers:
             process.join()
 
+        print("encoding queries")
+        if self.faiss_gpu:
+            multiprocessing_devices = list(range(1, torch.cuda.device_count()))
+        else:
+            multiprocessing_devices = None
         query_embeddings = model.encode(self.queries, show_progress_bar=self.show_progress_bar,
-                                        batch_size=self.batch_size, convert_to_numpy=True, num_proc=num_proc, multiprocessing_devices=list(range(1, torch.cuda.device_count())))
+                                        batch_size=self.batch_size, convert_to_numpy=True, num_proc=num_proc, multiprocessing_devices=multiprocessing_devices)
         # query_embeddings = query_embeddings.astype('float32')
         if self.score_function == "cos_sim":
             query_embeddings = normalized(query_embeddings, axis=1)
 
         # now let's search!
+        print("searching for queries")
         queries_result_list = []
         for i in range(0, nq, self.batch_size):
             query_batch = query_embeddings[i:i+self.batch_size]
-            scores, neighbours = index.search(query_batch, max_k)
+            scores, neighbours = index.search(pca(query_batch), max_k)
             queries_result_list.extend([[{"corpus_id": corpus_id, "score": score} for corpus_id, score in zip(neighbours[j], scores[j])] for j in range(len(query_batch))])
 
         logger.info("Queries: {}".format(nq))
         logger.info("Corpus: {}\n".format(nc))
 
         #Compute scores
+        print("computing scores")
         scores = self.scores_from_results(queries_result_list)
 
         #Output
@@ -413,3 +386,79 @@ class FaissIREvaluator(SentenceEvaluator):
         for i in range(min(len(relevances), k)):
             dcg += relevances[i] / np.log2(i + 2)  #+2 as we start our idx at 0
         return dcg
+
+    def embed_chunk(self, rank, model, corpus_chunk, batch_size, normalize, queue: mp.Queue, stop_signal: mp.Event):
+        # The first (hence the +1 and -1) GPU is reserved for the index if `faiss_gpu`
+        if self.faiss_gpu:
+            device_rank = rank % (torch.cuda.device_count() - 1) + 1
+        else:
+            device_rank = rank % (torch.cuda.device_count())
+        device = f"cuda:{device_rank}"
+        model = model.to(device)
+
+        for batch in tqdm(
+                [corpus_chunk[start: start + batch_size] for start in range(0, len(corpus_chunk), batch_size)],
+                desc=f"GPU {device_rank} chunks"):
+            embeddings = model.encode(batch, show_progress_bar=False, convert_to_numpy=False, convert_to_tensor=True,
+                                      batch_size=batch_size, device=device)
+            if normalize:
+                embeddings = F.normalize(embeddings, p=2, dim=-1)
+            queue.put(embeddings)
+
+        # Signal we are done
+        queue.put(None)
+
+        stop_signal.wait()
+
+def add_chunk_to_index(index: faiss.Index, embed_queue: mp.Queue, stop_signal: mp.Event, index_training_samples, num_proc, pca_dims=None,
+                       pca_queue: mp.Queue = None, device="cuda:0", corpus_size=-1):
+    none_count = 0
+    seen_examples = 0
+    seen_chunks = 0
+    initial_training_embeddings = []
+    start_time = time()
+
+    # identity for now, will change later if `pca_dims != None`
+    trained = False
+    pca = lambda embeddings: embeddings
+    U, S, V = None, None, None
+
+    with tqdm(total=corpus_size, desc="Index adds") as pbar:
+        while True:
+            embeddings = embed_queue.get()
+            if embeddings is not None:
+                seen_examples += embeddings.shape[0]
+                seen_chunks += 1
+                pbar.update(1)
+
+                embeddings = embeddings.to(device)
+                if trained:
+                    index.add(pca(embeddings))
+                else:
+                    initial_training_embeddings.append(embeddings)
+                    if seen_examples > index_training_samples:
+                        print("training index")
+                        training_data = torch.cat(initial_training_embeddings)
+
+                        if pca_dims is not None:
+                            U, S, V = torch.pca_lowrank(training_data, q=pca_dims)
+                            pca = lambda embeddings: torch.matmul(embeddings, V)
+
+                        training_data = pca(training_data)
+                        # index.train(training_data)
+                        index.add(training_data)
+                        print(f"index trained in {time() - start_time}s")
+                        trained = True
+                    else:
+                        continue
+            else:
+                none_count += 1
+            if none_count == num_proc:
+                assert embed_queue.empty()
+                print(f"Index built in {time() - start_time}")
+                break
+
+    if pca_queue is not None:
+        pca_queue.put(V)
+
+    stop_signal.wait()
