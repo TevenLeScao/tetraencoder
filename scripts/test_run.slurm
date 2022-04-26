@@ -31,9 +31,10 @@ srun $WORK/tetraencoder/scripts/accelerate_launcher.sh \
 --num_machines 8  \
 $WORK/tetraencoder/tetraencoder/train.py \
 --model_name_or_path $WORK/tetraencoder/all-mpnet-base-v2 \
---kelm_file $WORK/tetraencoder/datasets/KELM/clean_kelm.jsonl \
---tekgen_file $WORK/tetraencoder/datasets/TEKGEN/processed-tekgen-train.jsonl \
---trex_file $WORK/tetraencoder/datasets/TREx/trex_graphs.jsonl \
+--kelm_file $WORK/tetraencoder/outputs/dataset_embeddings/from_all/kelm.jsonl \
+--tekgen_file $WORK/tetraencoder/outputs/dataset_embeddings/from_all/tekgen.jsonl \
+--trex_file $WORK/tetraencoder/outputs/dataset_embeddings/from_all/trex.jsonl \
+--similarity_fraction_to_keep 0.75 \
 --train_batch_size 24 \
 --hard_negatives \
 --output_dir $SCRATCH/tetraencoder_xps \

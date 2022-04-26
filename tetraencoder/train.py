@@ -16,7 +16,7 @@ from faiss_ir_evaluator import FaissIREvaluator
 from translation_evaluator_with_recall import TranslationEvaluatorWithRecall
 from torch.utils.data import DataLoader
 
-from dataset_builders import *
+from dataset_wrappers import *
 
 dataset_builders = {"msmarco": MsMarcoDataset, "kelm": KelmDataset, "gooaq": GooAqDataset, "tekgen": TekgenDataset,
                     "trex": TRexDataset}
@@ -75,8 +75,8 @@ def build_evaluators(args):    # Create evaluators
                 FaissIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
                                  corpus_chunk_size=args.eval_corpus_chunk_size, precision_recall_at_k=[10],
                                  accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
-                                 score_function='cos_sim', index_training_samples=4096))
-            task_names.append("MPWW_fullIR")
+                                 score_function='cos_sim', index_training_samples=args.faiss_index_training_samples))
+            task_names.append("MPWW")
         else:
             evaluators.append(
                 TranslationEvaluatorWithRecall(mpww.rdfs(), mpww.sentences(),
@@ -107,6 +107,7 @@ if __name__ == "__main__":
     # training args
     parser.add_argument("--train_batch_size_per_gpu", default=64, type=int)
     parser.add_argument("--eval_batch_size_per_gpu", default=64, type=int)
+    parser.add_argument("--faiss_index_training_samples", default=40*4096, type=int)
     parser.add_argument("--num_epochs", default=1, type=int)
     parser.add_argument("--steps_per_epoch", default=None, type=int)
     parser.add_argument("--warmup_steps", default=1000, type=int)
@@ -118,6 +119,8 @@ if __name__ == "__main__":
     # dataset args
     for dataset_name in dataset_builders:
         parser.add_argument(f"--{dataset_name}_file", default=None, type=str)
+    parser.add_argument("--similarity_fraction_to_keep", default=None, type=float)
+    parser.add_argument("--map_num_proc_override", default=None, type=float)
     # evaluation dataset args
     parser.add_argument("--eval_webnlg_wikidata_file", default=None, type=str)
     parser.add_argument("--eval_webnlg_dbpedia_file", default=None, type=str)
@@ -166,16 +169,27 @@ if __name__ == "__main__":
     dataloaders = {}
     eval_dataloaders = {}
     for dataset_name in train_datasets:
+
+        if not accelerator.is_main_process:
+            print("Waiting for main process to perform the mapping")
+            torch.distributed.barrier()
+
         start_time = time()
         # for training
         input_filepath = vars(args)[f"{dataset_name}_file"]
         print(f"adding {dataset_name} to the corpus")
-        dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath)
+        dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath, map_num_proc=args.map_num_proc_override)
+        if args.similarity_fraction_to_keep is not None:
+            dataloaders[dataset_name].filter_by_similarity(args.similarity_fraction_to_keep)
         if args.hard_negatives:
             dataloaders[dataset_name].corruption = True
         dataloaders[dataset_name] = DataLoader(dataloaders[dataset_name], shuffle=False,
                                                batch_size=args.train_batch_size_per_gpu)
         print(f"added {dataset_name} to the corpus in {time() - start_time:.3f}s")
+
+        if accelerator.is_main_process:
+            print("Waiting for main process to perform the mapping")
+            torch.distributed.barrier()
 
     # Create evaluators
     sequential_evaluator, task_names = build_evaluators(args)
@@ -220,6 +234,7 @@ if __name__ == "__main__":
 
     if args.num_epochs > 0:
         # Train the model
+        print("launching training")
         model_save_path = os.path.join(args.output_dir, f'{name}-{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}')
         checkpoint_save_path = os.path.join(model_save_path, "checkpoints")
         os.makedirs(model_save_path, exist_ok=True)
