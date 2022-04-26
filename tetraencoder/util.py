@@ -7,22 +7,24 @@ from sentence_transformers.util import cos_sim, mismatched_sizes_all_gather
 from torch.nn import functional as F
 
 
-def pair_sims_datasets_map(examples: dict, rank: int, model: SentenceTransformer, text_key: str, rdf_key: str, batch_size: int):
+def pair_sims_datasets_map(examples: dict, rank: int = 0, model: SentenceTransformer = None, text_key: str = "text",
+                           rdf_key: str = "rdf_linearized", batch_size: int = 16, similarity_key: str = "similarity"):
     device = f"cuda:{rank % torch.cuda.device_count()}"
     model = model.to(device)
     embeddings1 = torch.stack(
-        model.encode(examples[text_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size, device=device))
+        model.encode(examples[text_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
+                     device=device))
     embeddings2 = torch.stack(
-        model.encode(examples[rdf_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size, device=device))
+        model.encode(examples[rdf_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
+                     device=device))
 
     cos_sims = F.cosine_similarity(embeddings1, embeddings2).detach().cpu().numpy()
-    examples["similarity"] = cos_sims
+    examples[similarity_key] = cos_sims
 
     return examples
 
 
 def all_sims(dataset1: List[str], dataset2: List[str], model: SentenceTransformer, batch_size: int):
-
     if torch.distributed.is_initialized():
         # axis 0 (dataset1) of variable size, axis 1 (dataset2) of constant size
         # computing the second embeddings normally for everyone
@@ -58,7 +60,8 @@ def all_sims(dataset1: List[str], dataset2: List[str], model: SentenceTransforme
 
     return cos_sims
 
+
 def normalized(a, axis=-1, order=2):
     l2 = np.atleast_1d(np.linalg.norm(a, order, axis))
-    l2[l2==0] = 1
+    l2[l2 == 0] = 1
     return a / np.expand_dims(l2, axis)

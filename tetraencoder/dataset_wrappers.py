@@ -1,3 +1,4 @@
+import copy
 from functools import partial
 from typing import List, Tuple
 import multiprocessing
@@ -68,12 +69,28 @@ def batch_corrupt_rdf(examples, rdf_key, max_tries=10):
     return examples
 
 
+def invert_all_triples(example, rdf_key):
+    example["rdf_inverted"] = linearize_rdf([[triple[2], triple[1], triple[0]] for triple in example[rdf_key]])
+    return example
+
+
+def invert_one_triple(example, rdf_key):
+    replacement_spot = randrange(len(example[rdf_key]))
+    inverted_rdf = copy.deepcopy(example[rdf_key])
+    inverted_rdf[replacement_spot] = [example["rdf_inverted"][replacement_spot][2],
+                                                 example["rdf_inverted"][replacement_spot][1],
+                                                 example["rdf_inverted"][replacement_spot][0]]
+    example["rdf_inverted"] = linearize_rdf(inverted_rdf)
+    return example
+
+
 class InputExampleDataset:
 
-    def __init__(self, previous_text_key = None):
+    def __init__(self, previous_text_key=None, map_num_proc=None):
         self.dataset = None
         self.corruption = False
         self.previous_text_key = previous_text_key
+        self.map_num_proc = map_num_proc if map_num_proc is not None else NCPUS
 
     def __iter__(self):
         for index in range(len(self.dataset)):
@@ -114,7 +131,7 @@ class InputExampleDataset:
 
     # used to keep the high-scoring pairs for some similarity metric
     def filter_by_similarity(self, remaining_fraction, similarity_key="similarity"):
-        assert remaining_fraction < len(self)
+        assert remaining_fraction <= 1
         assert similarity_key in self.dataset.column_names, f"This doesn't have a {similarity_key} score"
         similarities = self.dataset[similarity_key]
         cutoff_index = round(remaining_fraction * len(self))
@@ -126,8 +143,8 @@ class InputExampleDataset:
 
 
 class MsMarcoDataset(InputExampleDataset):
-    def __init__(self, data_file):
-        super().__init__()
+    def __init__(self, data_file, **kwargs):
+        super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
 
@@ -139,13 +156,14 @@ class MsMarcoDataset(InputExampleDataset):
 
 
 class KelmDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951):
-        super().__init__(previous_text_key="gen_sentence")
+    def __init__(self, data_file, seed=1951, **kwargs):
+        super().__init__(previous_text_key="gen_sentence", **kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(batch_linearize_rdf, batched=True, num_proc=NCPUS)
+        self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+                 batch_size=CORRUPTION_BATCH_SIZE)
         self.uniformize_text_key()
 
     def __len__(self):
@@ -166,8 +184,8 @@ class KelmDataset(InputExampleDataset):
 
 
 class GooAqDataset(InputExampleDataset):
-    def __init__(self, data_file):
-        super().__init__()
+    def __init__(self, data_file, **kwargs):
+        super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
 
@@ -185,13 +203,14 @@ class GooAqDataset(InputExampleDataset):
 
 
 class TekgenDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951):
-        super().__init__(previous_text_key="sentence")
+    def __init__(self, data_file, seed=1951, **kwargs):
+        super().__init__(previous_text_key="sentence", **kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(batch_linearize_rdf, batched=True, num_proc=NCPUS)
+        self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+                 batch_size=CORRUPTION_BATCH_SIZE)
         self.uniformize_text_key()
 
     def __len__(self):
@@ -212,13 +231,14 @@ class TekgenDataset(InputExampleDataset):
 
 
 class WebNlgDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951):
-        super().__init__()
+    def __init__(self, data_file, seed=1951, **kwargs):
+        super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS)
+        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+                 batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
         return len(self.dataset)
@@ -243,18 +263,21 @@ def extract_sq_triplets(examples, src_key, rdf_key):
 
 
 class SQDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951):
-        super().__init__()
+    def __init__(self, data_file, seed=1951, **kwargs):
+        super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("csv", data_files=data_file)["train"]
         self.incomplete_triple = False
-        self.map(partial(extract_sq_triplets, src_key="src_prime", rdf_key="triples"), batched=True, num_proc=NCPUS)
-        self.map(partial(extract_sq_triplets, src_key="src_prime_noqf", rdf_key="incomplete_triples"), batched=True, num_proc=NCPUS)
-        self.map(batch_linearize_rdf, batched=True, num_proc=NCPUS)
+        self.map(partial(extract_sq_triplets, src_key="src_prime", rdf_key="triples"), batched=True,
+                 num_proc=self.map_num_proc)
+        self.map(partial(extract_sq_triplets, src_key="src_prime_noqf", rdf_key="incomplete_triples"), batched=True,
+                 num_proc=self.map_num_proc)
+        self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
         self.map(partial(batch_linearize_rdf, rdf_key="incomplete_triples", output_key="incomplete_rdf_linearized"),
-                 batched=True, num_proc=NCPUS)
+                 batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+                 batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
         return len(self.dataset)
@@ -287,16 +310,17 @@ class SQDataset(InputExampleDataset):
 
 
 class GenWikiDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951):
-        super().__init__()
+    def __init__(self, data_file, seed=1951, **kwargs):
+        super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(GenWikiDataset.batched_fill_in_entities, batched=True, num_proc=NCPUS)
+        self.map(GenWikiDataset.batched_fill_in_entities, batched=True, num_proc=self.map_num_proc)
         self.rename_column("text", "unfilled_text")
         self.rename_column("filled_text", "text")
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS)
+        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+                 batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
         return len(self.dataset)
@@ -328,13 +352,14 @@ class GenWikiDataset(InputExampleDataset):
 
 
 class TRexDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951):
-        super().__init__()
+    def __init__(self, data_file, seed=1951, **kwargs):
+        super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS)
+        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples", max_tries=1000), batched=True, num_proc=NCPUS, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_corrupt_rdf, rdf_key="triples", max_tries=1000), batched=True,
+                 num_proc=self.map_num_proc, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
         return len(self.dataset)
@@ -351,11 +376,11 @@ class TRexDataset(InputExampleDataset):
 
 
 class MPWWDataset(InputExampleDataset):
-    def __init__(self, data_file):
-        super().__init__()
+    def __init__(self, data_file, **kwargs):
+        super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=NCPUS)
+        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
 
     def __len__(self):
         return len(self.dataset)
