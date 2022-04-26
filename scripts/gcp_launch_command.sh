@@ -1,9 +1,9 @@
 accelerate launch tetraencoder/train.py  \
 --model_name_or_path sentence-transformers/all-mpnet-base-v2 \
---kelm_file datasets/KELM/clean_kelm.jsonl \
---tekgen_file datasets/TEKGEN/processed-tekgen-train.jsonl \
---trex_file datasets/TREx/trex_graphs.jsonl \
---eval_sq_file datasets/SQ/wd/all_splits.csv \
+--kelm_file outputs/dataset_embeddings/from_all/kelm.jsonl \
+--tekgen_file outputs/dataset_embeddings/from_all/tekgen.jsonl \
+--trex_file outputs/dataset_embeddings/from_all/trex.jsonl \
+--similarity_fraction_to_keep 0.75 \
 --eval_webnlg_wikidata_file datasets/WebNLG_Wikidata/processed_webnlg_wikidata.jsonl \
 --train_batch_size 24 \
 --eval_batch_size 80 \
@@ -15,4 +15,4 @@ accelerate launch tetraencoder/train.py  \
 --find_unused_parameters \
 --hard_negatives \
 --wandb \
---run_name all_datasets_bs192_hard_neg
+--run_name filtered_all_datasets_bs192_hard_neg
