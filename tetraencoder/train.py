@@ -61,6 +61,15 @@ def build_evaluators(args):    # Create evaluators
                                            batch_size=args.eval_batch_size_per_gpu))
         task_names.append("SQ_full_triplet")
 
+    if args.eval_simple_mpww_file is not None:
+        print("adding simplified MPWW data")
+        eval_simple_mpww_dataset = WebNlgDataset(args.eval_simple_mpww_file)
+        evaluators.append(
+            TranslationEvaluatorWithRecall(eval_simple_mpww_dataset.rdfs(), eval_simple_mpww_dataset.sentences(),
+                                           show_progress_bar=False,
+                                           batch_size=args.eval_batch_size_per_gpu))
+        task_names.append("MPWW_simplified")
+
     if args.eval_mpww_file is not None:
         print("adding MPWW queries eval data")
         mpww = MPWWDataset(args.eval_mpww_file)
@@ -126,6 +135,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_webnlg_dbpedia_file", default=None, type=str)
     parser.add_argument("--eval_gooaq_file", default=None, type=str)
     parser.add_argument("--eval_sq_file", default=None, type=str)
+    parser.add_argument("--eval_simple_mpww_file", default=None, type=str)
     parser.add_argument("--eval_mpww_file", default=None, type=str)
     parser.add_argument("--eval_mpww_passages_file", default=None, type=str)
     parser.add_argument("--eval_corpus_chunk_size", default=16384, type=int)

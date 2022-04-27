@@ -8,13 +8,18 @@ import numpy as np
 from sentence_transformers import InputExample
 from random import randrange, choice
 
+# special tokens
 Q_TOKEN = "[Q]"
 S_TOKEN = "[S]"
 P_TOKEN = "[P]"
 O_TOKEN = "[O]"
 N_TOKEN = ""
 SPECIAL_TOKENS = [Q_TOKEN, S_TOKEN, P_TOKEN, O_TOKEN, N_TOKEN]
+
+# hyperparams for hard negatives
 CORRUPTION_BATCH_SIZE = 10000  # The higher the better
+
+# general variable to use by default in num_procs
 NCPUS = multiprocessing.cpu_count()
 
 
@@ -40,7 +45,8 @@ def batch_linearize_rdf(examples, rdf_key="triples", output_key="rdf_linearized"
     return examples
 
 
-def corrupt_rdf(triples, replacements: Tuple[List, List, List], max_tries=10):
+# unitary example function for `batch_mix_triples`
+def replace_random_triples(triples, replacements: Tuple[List, List, List], max_tries=10):
     encoded_rdf = ""
     for triple in triples:
         replacement_spot = randrange(3)
@@ -61,11 +67,12 @@ def corrupt_rdf(triples, replacements: Tuple[List, List, List], max_tries=10):
     return encoded_rdf
 
 
-def batch_corrupt_rdf(examples, rdf_key, max_tries=10):
+# batch-level function to replace random elements in graphs with elements found somewhere else in the batch
+def batch_mix_triples(examples, rdf_key, max_tries=10):
     replacements = ([triple[0] for rdf in examples[rdf_key] for triple in rdf],
                     [triple[1] for rdf in examples[rdf_key] for triple in rdf],
                     [triple[2] for rdf in examples[rdf_key] for triple in rdf])
-    examples["rdf_corrupted"] = [corrupt_rdf(rdf, replacements, max_tries=max_tries) for rdf in examples[rdf_key]]
+    examples["rdf_corrupted"] = [replace_random_triples(rdf, replacements, max_tries=max_tries) for rdf in examples[rdf_key]]
     return examples
 
 
@@ -162,7 +169,7 @@ class KelmDataset(InputExampleDataset):
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
         self.uniformize_text_key()
 
@@ -209,7 +216,7 @@ class TekgenDataset(InputExampleDataset):
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
         self.uniformize_text_key()
 
@@ -237,8 +244,6 @@ class WebNlgDataset(InputExampleDataset):
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
-                 batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
         return len(self.dataset)
@@ -276,7 +281,7 @@ class SQDataset(InputExampleDataset):
         self.map(partial(batch_linearize_rdf, rdf_key="incomplete_triples", output_key="incomplete_rdf_linearized"),
                  batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -319,7 +324,7 @@ class GenWikiDataset(InputExampleDataset):
         self.rename_column("filled_text", "text")
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):
@@ -358,7 +363,7 @@ class TRexDataset(InputExampleDataset):
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_corrupt_rdf, rdf_key="triples", max_tries=1000), batched=True,
+        self.map(partial(batch_mix_triples, rdf_key="triples", max_tries=1000), batched=True,
                  num_proc=self.map_num_proc, batch_size=CORRUPTION_BATCH_SIZE)
 
     def __len__(self):

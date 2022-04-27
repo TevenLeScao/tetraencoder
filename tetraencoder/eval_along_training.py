@@ -78,6 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_webnlg_dbpedia_file", default=None, type=str)
     parser.add_argument("--eval_gooaq_file", default=None, type=str)
     parser.add_argument("--eval_sq_file", default=None, type=str)
+    parser.add_argument("--eval_simple_mpww_file", default=None, type=str)
     parser.add_argument("--eval_mpww_file", default=None, type=str)
     parser.add_argument("--eval_mpww_passages_file", default=None, type=str)
     # instrumentation

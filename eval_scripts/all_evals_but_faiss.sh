@@ -6,4 +6,5 @@ accelerate launch tetraencoder/eval_along_training.py \
 --eval_webnlg_dbpedia_file datasets/WebNLG_DBpedia/processed_webnlg_dbpedia.jsonl \
 --max_seq_length 384 \
 --wandb \
+--accelerate \
 --run_name $2

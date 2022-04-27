@@ -50,12 +50,10 @@ def all_sims(dataset1: List[str], dataset2: List[str], model: SentenceTransforme
         cos_sims = torch.cat(mismatched_sizes_all_gather(local_sims))
 
     else:
-        embeddings1 = torch.stack(
-            model.encode(dataset1, show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
-                         num_proc=torch.cuda.device_count()))
-        embeddings2 = torch.stack(
-            model.encode(dataset2, show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
-                         num_proc=torch.cuda.device_count()))
+        embeddings1 = model.encode(dataset1, show_progress_bar=False, convert_to_tensor=True, batch_size=batch_size,
+                         num_proc=torch.cuda.device_count())
+        embeddings2 = model.encode(dataset2, show_progress_bar=False, convert_to_tensor=True, batch_size=batch_size,
+                         num_proc=torch.cuda.device_count())
         cos_sims = cos_sim(embeddings1, embeddings2)
 
     return cos_sims
