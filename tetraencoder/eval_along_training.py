@@ -3,8 +3,8 @@ import glob
 import os.path
 import random
 
-import numpy as np
 import torch
+torch.multiprocessing.set_sharing_strategy('file_system')
 from accelerate import Accelerator
 from datasets import tqdm
 from sentence_transformers import SentenceTransformer
@@ -12,8 +12,7 @@ from sentence_transformers import SentenceTransformer
 from dataset_wrappers import *
 from train import build_evaluators
 
-dataset_builders = {"msmarco": MsMarcoDataset, "kelm": KelmDataset, "gooaq": GooAqDataset, "tekgen": TekgenDataset,
-                    "trex": TRexDataset}
+datasets.logging.set_verbosity_error()
 
 
 def evaluate(model_path, sequential_evaluator, task_names, batch_size, wandb_log=False, max_seq_length=512,

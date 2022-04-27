@@ -18,6 +18,23 @@ SPECIAL_TOKENS = [Q_TOKEN, S_TOKEN, P_TOKEN, O_TOKEN, N_TOKEN]
 
 # hyperparams for hard negatives
 CORRUPTION_BATCH_SIZE = 10000  # The higher the better
+SYMMETRICAL_RELATIONSHIPS = [
+    "taxon synonym",
+    "partner in business or sport",
+    "opposite of",
+    "partially coincident with",
+    "physically interacts with",
+    "partner",
+    "relative",
+    "related category",
+    "connects with",
+    "twinned administrative body",
+    "different from",
+    "said to be the same as",
+    "sibling",
+    "adjacent station",
+    "shares border with",
+]
 
 # general variable to use by default in num_procs
 NCPUS = multiprocessing.cpu_count()
@@ -46,7 +63,7 @@ def batch_linearize_rdf(examples, rdf_key="triples", output_key="rdf_linearized"
 
 
 # unitary example function for `batch_mix_triples`
-def replace_random_triples(triples, replacements: Tuple[List, List, List], max_tries=10):
+def replace_random_triples(triples, replacements: Tuple[List, List, List], max_tries=1000):
     encoded_rdf = ""
     for triple in triples:
         replacement_spot = randrange(3)
@@ -68,26 +85,40 @@ def replace_random_triples(triples, replacements: Tuple[List, List, List], max_t
 
 
 # batch-level function to replace random elements in graphs with elements found somewhere else in the batch
-def batch_mix_triples(examples, rdf_key, max_tries=10):
+def batch_mix_triples(examples, rdf_key="triples", max_tries=1000):
     replacements = ([triple[0] for rdf in examples[rdf_key] for triple in rdf],
                     [triple[1] for rdf in examples[rdf_key] for triple in rdf],
                     [triple[2] for rdf in examples[rdf_key] for triple in rdf])
-    examples["rdf_corrupted"] = [replace_random_triples(rdf, replacements, max_tries=max_tries) for rdf in examples[rdf_key]]
+    examples["rdf_mixed"] = [replace_random_triples(rdf, replacements, max_tries=max_tries) for rdf in examples[rdf_key]]
     return examples
 
 
-def invert_all_triples(example, rdf_key):
-    example["rdf_inverted"] = linearize_rdf([[triple[2], triple[1], triple[0]] for triple in example[rdf_key]])
+def _invert_triple(triple):
+    output = copy.deepcopy(triple)
+    output[0] = triple[-1]
+    output[-1] = triple[0]
+    return output
+
+
+def invert_all_triples(example, rdf_key="triples"):
+    # if all triples in the RDF are symmetrical relationships, return None
+    if all([triple[1] in SYMMETRICAL_RELATIONSHIPS for triple in example[rdf_key]]):
+        example["rdf_inverted"] = None
+    else:
+        example["rdf_inverted"] = linearize_rdf([_invert_triple(triple) for triple in example[rdf_key]])
     return example
 
 
-def invert_one_triple(example, rdf_key):
-    replacement_spot = randrange(len(example[rdf_key]))
-    inverted_rdf = copy.deepcopy(example[rdf_key])
-    inverted_rdf[replacement_spot] = [example["rdf_inverted"][replacement_spot][2],
-                                                 example["rdf_inverted"][replacement_spot][1],
-                                                 example["rdf_inverted"][replacement_spot][0]]
-    example["rdf_inverted"] = linearize_rdf(inverted_rdf)
+def invert_one_triple(example, rdf_key="triples"):
+    # if all triples in the RDF are symmetrical relationships, return None
+    possible_swap_spots = [i for i in range(len(example[rdf_key])) if example[rdf_key][i][1] not in SYMMETRICAL_RELATIONSHIPS]
+    if len(possible_swap_spots) == 0:
+        example["rdf_inverted"] = None
+    else:
+        # we invert at random one of the non-symmetrical relationship triples
+        replacement_spot = possible_swap_spots[randrange(len(possible_swap_spots))]
+        inverted_rdf = [_invert_triple(example[rdf_key][i]) if i == replacement_spot else example[rdf_key][i] for i in range(len(example[rdf_key]))]
+        example["rdf_inverted"] = linearize_rdf(inverted_rdf)
     return example
 
 
@@ -95,7 +126,7 @@ class InputExampleDataset:
 
     def __init__(self, previous_text_key=None, map_num_proc=None):
         self.dataset = None
-        self.corruption = False
+        self.corruption = []
         self.previous_text_key = previous_text_key
         self.map_num_proc = map_num_proc if map_num_proc is not None else NCPUS
 
@@ -171,6 +202,7 @@ class KelmDataset(InputExampleDataset):
         self.shuffle(seed=seed)
         self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
         self.uniformize_text_key()
 
     def __len__(self):
@@ -178,10 +210,12 @@ class KelmDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        if self.corruption:
-            return InputExample(texts=[example["text"], example["rdf_linearized"], example["rdf_corrupted"]])
-        else:
-            return InputExample(texts=[example["text"], example["rdf_linearized"]])
+        outputs = [example["text"], example["rdf_linearized"]]
+        if "mix" in self.corruption:
+            outputs.append(example["rdf_mixed"])
+        if "invert" in self.corruption and example["rdf_inverted"] is not None:
+            outputs.append(example["rdf_inverted"])
+        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -218,6 +252,7 @@ class TekgenDataset(InputExampleDataset):
         self.shuffle(seed=seed)
         self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
         self.uniformize_text_key()
 
     def __len__(self):
@@ -225,10 +260,12 @@ class TekgenDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        if self.corruption:
-            return InputExample(texts=[example["text"], example["rdf_linearized"], example["rdf_corrupted"]])
-        else:
-            return InputExample(texts=[example["text"], example["rdf_linearized"]])
+        outputs = [example["text"], example["rdf_linearized"]]
+        if "mix" in self.corruption:
+            outputs.append(example["rdf_mixed"])
+        if "invert" in self.corruption and example["rdf_inverted"] is not None:
+            outputs.append(example["rdf_inverted"])
+        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -243,6 +280,9 @@ class WebNlgDataset(InputExampleDataset):
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
+        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+                 batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
 
     def __len__(self):
@@ -250,10 +290,12 @@ class WebNlgDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        if self.corruption:
-            return InputExample(texts=[example["text"], example["rdf_linearized"], example["rdf_corrupted"]])
-        else:
-            return InputExample(texts=[example["text"], example["rdf_linearized"]])
+        outputs = [example["text"], example["rdf_linearized"]]
+        if "mix" in self.corruption:
+            outputs.append(example["rdf_mixed"])
+        if "invert" in self.corruption and example["rdf_inverted"] is not None:
+            outputs.append(example["rdf_inverted"])
+        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -283,6 +325,7 @@ class SQDataset(InputExampleDataset):
         self.shuffle(seed=seed)
         self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
 
     def __len__(self):
         return len(self.dataset)
@@ -292,10 +335,12 @@ class SQDataset(InputExampleDataset):
         rdf_linearized = example["incomplete_rdf_linearized"] if self.incomplete_triple else example["rdf_linearized"]
         question = example["refs"]
 
-        if self.corruption:
-            return InputExample(texts=[question, rdf_linearized, example["rdf_corrupted"]])
-        else:
-            return InputExample(texts=[question, rdf_linearized])
+        outputs = [question, rdf_linearized]
+        if "mix" in self.corruption:
+            outputs.append(example["rdf_mixed"])
+        if "invert" in self.corruption and example["rdf_inverted"] is not None:
+            outputs.append(example["rdf_inverted"])
+        return InputExample(texts=outputs)
 
     def switch_to_incomplete_triples(self):
         self.incomplete_triple = True
@@ -326,6 +371,7 @@ class GenWikiDataset(InputExampleDataset):
         self.shuffle(seed=seed)
         self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
 
     def __len__(self):
         return len(self.dataset)
@@ -344,10 +390,12 @@ class GenWikiDataset(InputExampleDataset):
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        if self.corruption:
-            return InputExample(texts=[example["text"], example["linearized_rdf"], example["corrupted_rdf"]])
-        else:
-            return InputExample(texts=[example["text"], example["linearized_rdf"]])
+        outputs = [example["text"], example["rdf_linearized"]]
+        if "mix" in self.corruption:
+            outputs.append(example["rdf_mixed"])
+        if "invert" in self.corruption and example["rdf_inverted"] is not None:
+            outputs.append(example["rdf_inverted"])
+        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -363,15 +411,21 @@ class TRexDataset(InputExampleDataset):
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         self.shuffle(seed=seed)
-        self.map(partial(batch_mix_triples, rdf_key="triples", max_tries=1000), batched=True,
-                 num_proc=self.map_num_proc, batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+                 batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, item):
         example = self.dataset[item]
-        return InputExample(texts=[example["text"], example["rdf_linearized"]])
+        outputs = [example["text"], example["rdf_linearized"]]
+        if "mix" in self.corruption:
+            outputs.append(example["rdf_mixed"])
+        if "invert" in self.corruption and example["rdf_inverted"] is not None:
+            outputs.append(example["rdf_inverted"])
+        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -399,3 +453,8 @@ class MPWWDataset(InputExampleDataset):
 
     def sentences(self):
         return self.dataset["text"]
+
+
+# train_dataset_builders
+dataset_builders = {"msmarco": MsMarcoDataset, "kelm": KelmDataset, "gooaq": GooAqDataset, "tekgen": TekgenDataset,
+                    "trex": TRexDataset}

@@ -18,7 +18,6 @@ from torch.nn import functional as F
 from util import normalized
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
 event = None
 
 
