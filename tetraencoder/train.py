@@ -121,7 +121,7 @@ if __name__ == "__main__":
     parser.add_argument("--warmup_steps", default=1000, type=int)
     parser.add_argument("--gradient_accumulation", default=1, type=int)
     parser.add_argument("--lr", default=2e-5, type=float)
-    parser.add_argument("--mixed_negatives", action="store_true")
+    parser.add_argument("--replaced_negatives", action="store_true")
     parser.add_argument("--inverted_negatives", action="store_true")
     # i/o args
     parser.add_argument("--output_dir", default=".", type=str)
@@ -191,7 +191,7 @@ if __name__ == "__main__":
         dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath, map_num_proc=args.map_num_proc_override)
         if args.similarity_fraction_to_keep is not None:
             dataloaders[dataset_name].filter_by_similarity(args.similarity_fraction_to_keep)
-        if args.mixed_negatives:
+        if args.replaced_negatives:
             dataloaders[dataset_name].corruption.append("mix")
         if args.inverted_negatives:
             dataloaders[dataset_name].corruption.append("invert")

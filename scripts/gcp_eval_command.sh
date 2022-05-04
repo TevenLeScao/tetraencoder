@@ -12,6 +12,6 @@ accelerate launch tetraencoder/train.py  \
 --checkpoint_save_steps 2000 \
 --max_seq_length 384 \
 --find_unused_parameters \
---hard_negatives \
+--replaced_negatives \
 --wandb \
 --run_name baseline

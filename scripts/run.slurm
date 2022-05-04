@@ -37,13 +37,12 @@ $WORK/tetraencoder/tetraencoder/train.py \
 --trex_file $WORK/tetraencoder/outputs/dataset_embeddings/from_all/trex.jsonl \
 --similarity_fraction_to_keep 0.75 \
 --train_batch_size 20 \
---hard_negatives \
+--replaced_negatives \
 --output_dir $SCRATCH/tetraencoder_xps \
 --num_epochs 1 \
 --eval_steps 1000 \
 --checkpoint_save_steps 1000 \
 --max_seq_length 384 \
---wandb \
 --run_name all_datasets_bs2560_hard_neg \
 --find_unused_parameters
 wait

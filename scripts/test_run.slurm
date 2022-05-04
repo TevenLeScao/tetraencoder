@@ -36,7 +36,7 @@ $WORK/tetraencoder/tetraencoder/train.py \
 --trex_file $WORK/tetraencoder/outputs/dataset_embeddings/from_all/trex.jsonl \
 --similarity_fraction_to_keep 0.75 \
 --train_batch_size 24 \
---hard_negatives \
+--replaced_negatives \
 --output_dir $SCRATCH/tetraencoder_xps \
 --num_epochs 1 \
 --eval_steps 1000 \

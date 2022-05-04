@@ -3,7 +3,6 @@ accelerate launch tetraencoder/train.py  \
 --kelm_file outputs/dataset_embeddings/from_all/kelm.jsonl \
 --tekgen_file outputs/dataset_embeddings/from_all/tekgen.jsonl \
 --trex_file outputs/dataset_embeddings/from_all/trex.jsonl \
---similarity_fraction_to_keep 0.75 \
 --eval_webnlg_wikidata_file datasets/WebNLG_Wikidata/processed_webnlg_wikidata.jsonl \
 --train_batch_size 24 \
 --eval_batch_size 80 \
@@ -13,6 +12,7 @@ accelerate launch tetraencoder/train.py  \
 --checkpoint_save_steps 2000 \
 --max_seq_length 384 \
 --find_unused_parameters \
---hard_negatives \
+--replaced_negatives \
+--inverted_negatives \
 --wandb \
---run_name filtered_all_datasets_bs192_hard_neg
+--run_name all_bs192_allneg
