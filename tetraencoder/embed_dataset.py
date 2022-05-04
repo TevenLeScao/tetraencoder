@@ -11,9 +11,6 @@ from sentence_transformers import SentenceTransformer
 from dataset_wrappers import *
 from util import pair_sims_datasets_map
 
-
-dataset_builders = OrderedDict([("webnlg", WebNlgDataset), ("genwiki", GenWikiDataset), ("tekgen", TekgenDataset), ("trex", TRexDataset), ("kelm", KelmDataset)])
-
 if __name__ == "__main__":
     # CUDA multiprocessing
     set_start_method("spawn")
@@ -48,6 +45,7 @@ if __name__ == "__main__":
             dataset.select(range(args.subset))
         out_path = out_path + ".jsonl"
         dataset.map(
-            partial(pair_sims_datasets_map, model=model, text_key="text", rdf_key="rdf_linearized", batch_size=args.batch_size),
+            partial(pair_sims_datasets_map, model=model, text_key="text", rdf_key="rdf_linearized",
+                    batch_size=args.batch_size),
             batched=True, batch_size=args.batch_size, with_rank=True, num_proc=torch.cuda.device_count())
         dataset.to_json(out_path)

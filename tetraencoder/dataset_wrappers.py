@@ -1,4 +1,5 @@
 import copy
+from collections import OrderedDict
 from functools import partial
 from typing import List, Tuple
 import multiprocessing
@@ -105,7 +106,7 @@ def invert_all_triples(example, rdf_key="triples"):
     if all([triple[1] in SYMMETRICAL_RELATIONSHIPS for triple in example[rdf_key]]):
         example["rdf_inverted"] = None
     else:
-        example["rdf_inverted"] = linearize_rdf([_invert_triple(triple) for triple in example[rdf_key]])
+        example["rdf_full_inverted"] = linearize_rdf([_invert_triple(triple) for triple in example[rdf_key]])
     return example
 
 
@@ -138,7 +139,15 @@ class InputExampleDataset:
 
     # dependent on the dataset, will return an InputExample of some sort. This wrapper exists to return InputExample pairs
     def __getitem__(self, item):
-        return NotImplementedError()
+        example = self.dataset[item]
+        outputs = [example["text"], example["rdf_linearized"]]
+        if "mix" in self.corruption:
+            outputs.append(example["rdf_mixed"])
+        if "invert" in self.corruption and example["rdf_inverted"] is not None:
+            outputs.append(example["rdf_inverted"])
+        if "full_invert" in self.corruption and example["rdf_inverted"] is not None:
+            outputs.append(example["rdf_full_inverted"])
+        return InputExample(texts=outputs)
 
     def __len__(self):
         return len(self.dataset)
@@ -179,6 +188,13 @@ class InputExampleDataset:
         cutoff_value = np.partition(similarities, -cutoff_index)[-cutoff_index]
         self.filter(lambda x: x[similarity_key] >= cutoff_value)
 
+    def setup_for_training(self, seed=1951):
+        self.shuffle(seed=seed)
+        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+                 batch_size=CORRUPTION_BATCH_SIZE)
+        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
+        self.map(partial(invert_all_triples, rdf_key="triples"), num_proc=self.map_num_proc)
+
 
 class MsMarcoDataset(InputExampleDataset):
     def __init__(self, data_file, **kwargs):
@@ -199,23 +215,11 @@ class KelmDataset(InputExampleDataset):
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
-        self.shuffle(seed=seed)
-        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
-                 batch_size=CORRUPTION_BATCH_SIZE)
-        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
+        self.setup_for_training(seed)
         self.uniformize_text_key()
 
     def __len__(self):
         return len(self.dataset)
-
-    def __getitem__(self, item):
-        example = self.dataset[item]
-        outputs = [example["text"], example["rdf_linearized"]]
-        if "mix" in self.corruption:
-            outputs.append(example["rdf_mixed"])
-        if "invert" in self.corruption and example["rdf_inverted"] is not None:
-            outputs.append(example["rdf_inverted"])
-        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -249,23 +253,11 @@ class TekgenDataset(InputExampleDataset):
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
-        self.shuffle(seed=seed)
-        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
-                 batch_size=CORRUPTION_BATCH_SIZE)
-        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
+        self.setup_for_training(seed)
         self.uniformize_text_key()
 
     def __len__(self):
         return len(self.dataset)
-
-    def __getitem__(self, item):
-        example = self.dataset[item]
-        outputs = [example["text"], example["rdf_linearized"]]
-        if "mix" in self.corruption:
-            outputs.append(example["rdf_mixed"])
-        if "invert" in self.corruption and example["rdf_inverted"] is not None:
-            outputs.append(example["rdf_inverted"])
-        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -280,22 +272,10 @@ class WebNlgDataset(InputExampleDataset):
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
-                 batch_size=CORRUPTION_BATCH_SIZE)
-        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
-        self.shuffle(seed=seed)
+        self.setup_for_training(seed)
 
     def __len__(self):
         return len(self.dataset)
-
-    def __getitem__(self, item):
-        example = self.dataset[item]
-        outputs = [example["text"], example["rdf_linearized"]]
-        if "mix" in self.corruption:
-            outputs.append(example["rdf_mixed"])
-        if "invert" in self.corruption and example["rdf_inverted"] is not None:
-            outputs.append(example["rdf_inverted"])
-        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -322,10 +302,6 @@ class SQDataset(InputExampleDataset):
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
         self.map(partial(batch_linearize_rdf, rdf_key="incomplete_triples", output_key="incomplete_rdf_linearized"),
                  batched=True, num_proc=self.map_num_proc)
-        self.shuffle(seed=seed)
-        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
-                 batch_size=CORRUPTION_BATCH_SIZE)
-        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
 
     def __len__(self):
         return len(self.dataset)
@@ -368,10 +344,7 @@ class GenWikiDataset(InputExampleDataset):
         self.rename_column("text", "unfilled_text")
         self.rename_column("filled_text", "text")
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.shuffle(seed=seed)
-        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
-                 batch_size=CORRUPTION_BATCH_SIZE)
-        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
+        self.setup_for_training(seed)
 
     def __len__(self):
         return len(self.dataset)
@@ -388,15 +361,6 @@ class GenWikiDataset(InputExampleDataset):
                                    zip(examples["text"], examples["entities"])]
         return examples
 
-    def __getitem__(self, item):
-        example = self.dataset[item]
-        outputs = [example["text"], example["rdf_linearized"]]
-        if "mix" in self.corruption:
-            outputs.append(example["rdf_mixed"])
-        if "invert" in self.corruption and example["rdf_inverted"] is not None:
-            outputs.append(example["rdf_inverted"])
-        return InputExample(texts=outputs)
-
     def rdfs(self):
         return self.dataset["rdf_linearized"]
 
@@ -410,22 +374,10 @@ class TRexDataset(InputExampleDataset):
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.shuffle(seed=seed)
-        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
-                 batch_size=CORRUPTION_BATCH_SIZE)
-        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
+        self.setup_for_training(seed)
 
     def __len__(self):
         return len(self.dataset)
-
-    def __getitem__(self, item):
-        example = self.dataset[item]
-        outputs = [example["text"], example["rdf_linearized"]]
-        if "mix" in self.corruption:
-            outputs.append(example["rdf_mixed"])
-        if "invert" in self.corruption and example["rdf_inverted"] is not None:
-            outputs.append(example["rdf_inverted"])
-        return InputExample(texts=outputs)
 
     def rdfs(self):
         return self.dataset["rdf_linearized"]
@@ -455,6 +407,7 @@ class MPWWDataset(InputExampleDataset):
         return self.dataset["text"]
 
 
-# train_dataset_builders
-dataset_builders = {"msmarco": MsMarcoDataset, "kelm": KelmDataset, "gooaq": GooAqDataset, "tekgen": TekgenDataset,
-                    "trex": TRexDataset}
+# train_dataset_builders - ordered so that smaller is first for `embed_datasets` so we can have results faster
+dataset_builders = OrderedDict([("webnlg", WebNlgDataset), ("genwiki", GenWikiDataset), ("tekgen", TekgenDataset),
+                                ("trex", TRexDataset), ("kelm", KelmDataset), ("msmarco", MsMarcoDataset),
+                                ("gooaq", GooAqDataset)])

@@ -123,6 +123,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", default=2e-5, type=float)
     parser.add_argument("--replaced_negatives", action="store_true")
     parser.add_argument("--inverted_negatives", action="store_true")
+    parser.add_argument("--full_inv_negatives", action="store_true")
     # i/o args
     parser.add_argument("--output_dir", default=".", type=str)
     # dataset args
@@ -195,6 +196,8 @@ if __name__ == "__main__":
             dataloaders[dataset_name].corruption.append("mix")
         if args.inverted_negatives:
             dataloaders[dataset_name].corruption.append("invert")
+        if args.full_inv_negatives:
+            dataloaders[dataset_name].corruption.append("full_invert")
         dataloaders[dataset_name] = DataLoader(dataloaders[dataset_name], shuffle=False,
                                                batch_size=args.train_batch_size_per_gpu)
         print(f"added {dataset_name} to the corpus in {time() - start_time:.3f}s")
