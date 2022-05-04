@@ -10,10 +10,7 @@ from sentence_transformers import SentenceTransformer
 
 from dataset_wrappers import *
 from util import pair_sims_datasets_map
-
-dataset_builders = OrderedDict(
-    [("genwiki", GenWikiDataset), ("tekgen", TekgenDataset), ("trex", TRexDataset), ("kelm", KelmDataset)])
-text_keys = {"genwiki": GenWikiDataset, "kelm": KelmDataset, "tekgen": TekgenDataset, "trex": TRexDataset}
+from embed_dataset import dataset_builders
 
 if __name__ == "__main__":
     # CUDA multiprocessing
@@ -48,8 +45,13 @@ if __name__ == "__main__":
             dataset.shuffle(seed=1066)
             dataset.select(range(args.subset))
         out_path = out_path + ".jsonl"
-        dataset.filter(lambda x: len(x["triples"]) == 1)
+        dataset.filter(lambda x: len(x["triples"]) == 1 and x["rdf_inverted"] is not None)
         dataset.map(partial(invert_all_triples, rdf_key="triples"))
+        if "similarity" not in dataset.dataset.column_names:
+            dataset.map(
+                partial(pair_sims_datasets_map, model=model, text_key="text", rdf_key="rdf_linearized",
+                        similarity_key="similarity", batch_size=args.batch_size),
+                batched=True, batch_size=args.batch_size, with_rank=True, num_proc=torch.cuda.device_count())
         dataset.map(
             partial(pair_sims_datasets_map, model=model, text_key="text", rdf_key="rdf_inverted",
                     similarity_key="similarity_inverted", batch_size=args.batch_size),

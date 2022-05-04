@@ -12,8 +12,7 @@ from dataset_wrappers import *
 from util import pair_sims_datasets_map
 
 
-dataset_builders = OrderedDict([("genwiki", GenWikiDataset), ("tekgen", TekgenDataset), ("trex", TRexDataset), ("kelm", KelmDataset)])
-text_keys = {"genwiki": GenWikiDataset, "kelm": KelmDataset, "tekgen": TekgenDataset, "trex": TRexDataset}
+dataset_builders = OrderedDict([("webnlg", WebNlgDataset), ("genwiki", GenWikiDataset), ("tekgen", TekgenDataset), ("trex", TRexDataset), ("kelm", KelmDataset)])
 
 if __name__ == "__main__":
     # CUDA multiprocessing
