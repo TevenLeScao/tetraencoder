@@ -104,7 +104,7 @@ def _invert_triple(triple):
 def invert_all_triples(example, rdf_key="triples"):
     # if all triples in the RDF are symmetrical relationships, return None
     if all([triple[1] in SYMMETRICAL_RELATIONSHIPS for triple in example[rdf_key]]):
-        example["rdf_inverted"] = None
+        example["rdf_full_inverted"] = None
     else:
         example["rdf_full_inverted"] = linearize_rdf([_invert_triple(triple) for triple in example[rdf_key]])
     return example
