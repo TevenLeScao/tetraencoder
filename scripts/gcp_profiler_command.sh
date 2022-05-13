@@ -1,0 +1,17 @@
+accelerate launch tetraencoder/train.py  \
+--model_name_or_path sentence-transformers/all-mpnet-base-v2 \
+--tekgen_file outputs/dataset_embeddings/from_all/tekgen.jsonl \
+--eval_webnlg_wikidata_file datasets/WebNLG_Wikidata/processed_webnlg_wikidata.jsonl \
+--train_batch_size 24 \
+--eval_batch_size 80 \
+--output_dir outputs/profiling \
+--num_epochs 1 \
+--steps_per_epoch 100 \
+--eval_steps 2000 \
+--checkpoint_save_steps 2000 \
+--max_seq_length 384 \
+--find_unused_parameters \
+--replaced_negatives \
+--inverted_negatives \
+--profile \
+--run_name bs192_allneg_profiling

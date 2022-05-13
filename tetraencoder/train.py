@@ -4,19 +4,17 @@ import random
 from datetime import datetime
 from time import time
 
-from datasets import load_dataset
-import numpy as np
 import torch
 from accelerate import DistributedDataParallelKwargs, Accelerator
+from datasets import load_dataset
 from sentence_transformers import SentenceTransformer, losses
-from sentence_transformers.evaluation import TranslationEvaluator, SequentialEvaluator, InformationRetrievalEvaluator
-from sentence_transformers.util import cos_sim
-
-from faiss_ir_evaluator import FaissIREvaluator
-from translation_evaluator_with_recall import TranslationEvaluatorWithRecall
+from sentence_transformers.evaluation import SequentialEvaluator
 from torch.utils.data import DataLoader
 
 from dataset_wrappers import *
+from faiss_ir_evaluator import FaissIREvaluator
+from translation_evaluator_with_recall import TranslationEvaluatorWithRecall
+from util import nullcontext
 
 datasets.logging.set_verbosity_error()
 
@@ -141,6 +139,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_mpww_passages_file", default=None, type=str)
     parser.add_argument("--eval_corpus_chunk_size", default=16384, type=int)
     # instrumentation
+    parser.add_argument("--profile", action="store_true")
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run_name", default=None, type=str)
     parser.add_argument("--logging_steps", default=100, type=int)
@@ -202,7 +201,7 @@ if __name__ == "__main__":
                                                batch_size=args.train_batch_size_per_gpu)
         print(f"added {dataset_name} to the corpus in {time() - start_time:.3f}s")
 
-        if accelerator.is_main_process:
+        if accelerator.is_main_process and accelerator.state.num_processes > 1:
             print("Waiting for main process to perform the mapping")
             torch.distributed.barrier()
 
@@ -252,25 +251,40 @@ if __name__ == "__main__":
         print("launching training")
         model_save_path = os.path.join(args.output_dir, f'{name}-{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}')
         checkpoint_save_path = os.path.join(model_save_path, "checkpoints")
-        os.makedirs(model_save_path, exist_ok=True)
-        model.fit(train_objectives=[(dataloader, train_loss) for dataloader in dataloaders.values()],
-                  evaluator=sequential_evaluator,
-                  evaluation_steps=args.eval_steps,
-                  epochs=args.num_epochs,
-                  steps_per_epoch=args.steps_per_epoch,
-                  warmup_steps=args.warmup_steps,
-                  use_amp=False,
-                  checkpoint_path=checkpoint_save_path,
-                  output_path=model_save_path,
-                  checkpoint_save_steps=args.checkpoint_save_steps,
-                  optimizer_params={'lr': args.lr},
-                  gradient_accumulation=args.gradient_accumulation,
-                  accelerator=accelerator,
-                  logging_steps=args.logging_steps,
-                  train_callback=train_callback,
-                  eval_callback=eval_callback,
-                  full_scores_callbacks=True
-                  )
+        if accelerator.is_main_process:
+            os.makedirs(model_save_path, exist_ok=True)
+
+        if args.profile:
+            profiler = torch.profiler.profile(schedule=torch.profiler.schedule(wait=5, warmup=5, active=10, repeat=1),
+                                              on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                                                  os.path.join(model_save_path, "profiler_log")),
+                                              with_stack=True)
+        else:
+            profiler = nullcontext()
+
+        with profiler as torch_profiler:
+            model.fit(train_objectives=[(dataloader, train_loss) for dataloader in dataloaders.values()],
+                      evaluator=sequential_evaluator,
+                      evaluation_steps=args.eval_steps,
+                      epochs=args.num_epochs,
+                      steps_per_epoch=args.steps_per_epoch,
+                      warmup_steps=args.warmup_steps,
+                      use_amp=False,
+                      checkpoint_path=checkpoint_save_path,
+                      output_path=model_save_path,
+                      checkpoint_save_steps=args.checkpoint_save_steps,
+                      optimizer_params={'lr': args.lr},
+                      gradient_accumulation=args.gradient_accumulation,
+                      accelerator=accelerator,
+                      logging_steps=args.logging_steps,
+                      train_callback=train_callback,
+                      eval_callback=eval_callback,
+                      full_scores_callbacks=True,
+                      torch_profiler=torch_profiler
+                      )
+
+            if hasattr(torch_profiler, "key_averages") and accelerator.is_main_process:
+                print(torch_profiler.key_averages().table(sort_by="self_cpu_time_total"))
 
     else:
         # trying to infer to which step went the model we're evaluating
