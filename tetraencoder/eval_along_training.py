@@ -72,6 +72,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_corpus_chunk_size", default=16384, type=int)
     parser.add_argument("--eval_batch_size_per_gpu", default=64, type=int)
     parser.add_argument("--faiss_index_training_samples", default=40*4096, type=int)
+    parser.add_argument("--faiss_gpu", action="store_true")
     # evaluation dataset args
     parser.add_argument("--eval_webnlg_wikidata_file", default=None, type=str)
     parser.add_argument("--eval_webnlg_dbpedia_file", default=None, type=str)

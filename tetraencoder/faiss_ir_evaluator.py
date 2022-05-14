@@ -167,31 +167,9 @@ class FaissIREvaluator(SentenceEvaluator):
         else:
             return main_score
 
-    def compute_metrices(self, model: SentenceTransformer, corpus_model: SentenceTransformer = None, num_proc: int = None):
+    def initialize_index(self, d, seed=1234):
 
-        gpu_mp = mp.get_context("spawn")
-        embed_queue = gpu_mp.Queue()
-        producer_stop_signal = gpu_mp.Event()
-        consumer_stop_signal = gpu_mp.Event()
-        max_k = max(max(self.mrr_at_k), max(self.ndcg_at_k), max(self.accuracy_at_k), max(self.precision_recall_at_k), max(self.map_at_k))
-
-        if corpus_model is None:
-            corpus_model = model
-
-        if self.pca_dims is None:
-            pca_queue = None
-            d = model.encode(self.queries[0]).shape[-1]  # dimension
-        else:
-            pca_queue = gpu_mp.Queue()
-            d = self.pca_dims
-
-        nc = len(self.corpus)  # corpus size
-        assert nc >= self.index_training_samples, f"corpus size {nc} is smaller than necessary training samples {self.index_training_samples}"
-        nq = len(self.queries)  # nb of queries
-        np.random.seed(1234)  # make reproducible
-        # quantizer = faiss.IndexFlatL2(d)  # the other
-        # metric = faiss.METRIC_L2
-        # index = faiss.IndexIVFFlat(quantizer, d, self.index_nlist, metric)
+        np.random.seed(seed)  # make reproducible
         index = faiss.index_factory(d, self.index_factory_string)
         if self.faiss_gpu:
             res = faiss.StandardGpuResources()  # use a single GPU
@@ -201,10 +179,25 @@ class FaissIREvaluator(SentenceEvaluator):
             index_device = "cpu"
         index.nprobe = self.index_nprobe
 
+        return index, index_device
+
+    def populate_index_multiprocessed(self, index, corpus_model, corpus_size, num_proc, index_device):
+
+        # setting up multiprocessing
+        gpu_mp = mp.get_context("spawn")
+        embed_queue = gpu_mp.Queue()
+        producer_stop_signal = gpu_mp.Event()
+        consumer_stop_signal = gpu_mp.Event()
+        if self.pca_dims is None:
+            pca_queue = None
+        else:
+            pca_queue = gpu_mp.Queue()
         producers = []
-        random_index = list(range(nc))
+
+        # shuffling the data
+        random_index = list(range(corpus_size))
         random.shuffle(random_index)
-        chunk_size = nc // (num_proc) + 1
+        chunk_size = corpus_size // num_proc + 1
         chunk_idxes = [random_index[i * chunk_size:(i + 1) * chunk_size] for i in
                        range(num_proc)]
 
@@ -220,12 +213,11 @@ class FaissIREvaluator(SentenceEvaluator):
             process.start()
 
         print("building index")
-
         consumer = gpu_mp.Process(target=add_chunk_to_index,
                                   kwargs={"index": index, "embed_queue": embed_queue, "stop_signal": consumer_stop_signal,
                                           "index_training_samples": self.index_training_samples, "num_proc": num_proc,
                                           "pca_dims": self.pca_dims, "pca_queue": pca_queue, "device": index_device,
-                                          "corpus_size": nc // self.batch_size})
+                                          "corpus_size": corpus_size // self.batch_size})
         consumer.start()
         if self.pca_dims is None:
             # no pca, identity
@@ -238,6 +230,27 @@ class FaissIREvaluator(SentenceEvaluator):
         producer_stop_signal.set()
         for process in producers:
             process.join()
+
+        return pca
+
+    def compute_metrices(self, model: SentenceTransformer, corpus_model: SentenceTransformer = None, num_proc: int = None):
+
+        max_k = max(max(self.mrr_at_k), max(self.ndcg_at_k), max(self.accuracy_at_k), max(self.precision_recall_at_k), max(self.map_at_k))
+
+        nc = len(self.corpus)  # corpus size
+        assert nc >= self.index_training_samples, f"corpus size {nc} is smaller than necessary training samples {self.index_training_samples}"
+        nq = len(self.queries)  # nb of queries
+
+        if corpus_model is None:
+            corpus_model = model
+
+        if self.pca_dims is None:
+            d = corpus_model.encode(self.queries[0]).shape[-1]  # dimension
+        else:
+            d = self.pca_dims
+
+        index, index_device = self.initialize_index(d)
+        pca = self.populate_index_multiprocessed(index, corpus_model, nc, num_proc, index_device)
 
         print("encoding queries")
         if self.faiss_gpu:

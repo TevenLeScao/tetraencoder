@@ -73,7 +73,6 @@ def build_evaluators(args):    # Create evaluators
         if args.eval_mpww_passages_file is not None:
             queries = {i: query for i, query in enumerate(mpww.rdfs())}
             print("adding MPWW passages corpus eval data")
-            print("adding MPWW passages corpus eval data")
             passages = load_dataset("csv", data_files=args.eval_mpww_passages_file)["train"]
             corpus = {i: passage for i, passage in enumerate(passages["text"])}
             relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
@@ -81,7 +80,8 @@ def build_evaluators(args):    # Create evaluators
                 FaissIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
                                  corpus_chunk_size=args.eval_corpus_chunk_size, precision_recall_at_k=[10],
                                  accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
-                                 score_function='cos_sim', index_training_samples=args.faiss_index_training_samples))
+                                 score_function='cos_sim', index_training_samples=args.faiss_index_training_samples,
+                                 faiss_gpu=args.faiss_gpu))
             task_names.append("MPWW")
         else:
             evaluators.append(
@@ -113,7 +113,6 @@ if __name__ == "__main__":
     # training args
     parser.add_argument("--train_batch_size_per_gpu", default=64, type=int)
     parser.add_argument("--eval_batch_size_per_gpu", default=64, type=int)
-    parser.add_argument("--faiss_index_training_samples", default=40*4096, type=int)
     parser.add_argument("--num_epochs", default=1, type=int)
     parser.add_argument("--steps_per_epoch", default=None, type=int)
     parser.add_argument("--warmup_steps", default=1000, type=int)
@@ -138,6 +137,8 @@ if __name__ == "__main__":
     parser.add_argument("--eval_mpww_file", default=None, type=str)
     parser.add_argument("--eval_mpww_passages_file", default=None, type=str)
     parser.add_argument("--eval_corpus_chunk_size", default=16384, type=int)
+    parser.add_argument("--faiss_index_training_samples", default=40*4096, type=int)
+    parser.add_argument("--faiss_gpu", action="store_true")
     # instrumentation
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--wandb", action="store_true")
