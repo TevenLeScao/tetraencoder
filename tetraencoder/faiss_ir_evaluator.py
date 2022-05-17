@@ -8,6 +8,7 @@ import faiss
 import faiss.contrib.torch_utils
 import numpy as np
 import torch
+from sklearn import decomposition
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 from sentence_transformers import SentenceTransformer
@@ -61,6 +62,7 @@ class FaissIREvaluator(SentenceEvaluator):
         self.queries = [queries[qid] for qid in self.queries_ids]
 
         self.corpus_ids = list(corpus.keys())
+        random.shuffle(self.corpus_ids)
         self.corpus = [corpus[cid] for cid in self.corpus_ids]
 
         self.index_training_samples = index_training_samples
@@ -124,8 +126,7 @@ class FaissIREvaluator(SentenceEvaluator):
         logger.info("Information Retrieval Evaluation on " + self.name + " dataset" + out_txt)
 
         if torch.distributed.is_initialized():
-            # currenty this may hang because of index creation time
-            scores = self.compute_metrices_distributed(model, *args, num_proc=num_proc, **kwargs)
+            raise NotImplementedError("this shouldn't be used in distributed mode")
         else:
             scores = self.compute_metrices(model, *args, num_proc=num_proc, **kwargs)
 
@@ -195,10 +196,8 @@ class FaissIREvaluator(SentenceEvaluator):
         producers = []
 
         # shuffling the data
-        random_index = list(range(corpus_size))
-        random.shuffle(random_index)
         chunk_size = corpus_size // num_proc + 1
-        chunk_idxes = [random_index[i * chunk_size:(i + 1) * chunk_size] for i in
+        chunk_idxes = [range(corpus_size)[i * chunk_size:(i + 1) * chunk_size] for i in
                        range(num_proc)]
 
         print("embedding dataset")
@@ -233,6 +232,25 @@ class FaissIREvaluator(SentenceEvaluator):
 
         return pca
 
+    def populate_index_simple(self, index, corpus_model, corpus_size, num_proc, index_device):
+
+        embeddings = corpus_model.encode(self.corpus, num_proc=num_proc)
+        training_embeddings = embeddings[:self.index_training_samples]
+
+        if self.pca_dims is not None:
+            _pca = decomposition.PCA(n_components=self.pca_dims)
+            _pca.fit(training_embeddings)
+            pca = lambda embeddings: _pca.transform(embeddings)
+        else:
+            pca = lambda x: x
+
+        # training_embeddings = pca(training_embeddings)
+        # index.train(training_embeddings)
+
+        index.add(pca(embeddings))
+
+        return pca
+
     def compute_metrices(self, model: SentenceTransformer, corpus_model: SentenceTransformer = None, num_proc: int = None):
 
         max_k = max(max(self.mrr_at_k), max(self.ndcg_at_k), max(self.accuracy_at_k), max(self.precision_recall_at_k), max(self.map_at_k))
@@ -250,7 +268,7 @@ class FaissIREvaluator(SentenceEvaluator):
             d = self.pca_dims
 
         index, index_device = self.initialize_index(d)
-        pca = self.populate_index_multiprocessed(index, corpus_model, nc, num_proc, index_device)
+        pca = self.populate_index_simple(index, corpus_model, nc, num_proc, index_device)
 
         print("encoding queries")
         if self.faiss_gpu:
@@ -259,7 +277,6 @@ class FaissIREvaluator(SentenceEvaluator):
             multiprocessing_devices = None
         query_embeddings = model.encode(self.queries, show_progress_bar=self.show_progress_bar,
                                         batch_size=self.batch_size, convert_to_numpy=True, num_proc=num_proc, multiprocessing_devices=multiprocessing_devices)
-        # query_embeddings = query_embeddings.astype('float32')
         if self.score_function == "cos_sim":
             query_embeddings = normalized(query_embeddings, axis=1)
 
@@ -283,9 +300,6 @@ class FaissIREvaluator(SentenceEvaluator):
         self.output_scores(scores)
 
         return scores
-
-    def compute_metrices_distributed(self, model, corpus_model=None, num_proc: int = None) -> Dict[str, float]:
-        raise NotImplementedError
 
     def scores_from_results(self, queries_result_list: List[object]):
         # Init score computation values
