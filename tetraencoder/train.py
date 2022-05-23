@@ -87,12 +87,7 @@ def build_evaluators(args):    # Create evaluators
             #                      score_function='cos_sim', index_training_samples=args.index_training_samples,
             #                      faiss_gpu=args.faiss_gpu))
             task_names.append("MPWW")
-        else:
-            evaluators.append(
-                TranslationEvaluatorWithRecall(mpww.rdfs(), mpww.sentences(),
-                                               show_progress_bar=False,
-                                               batch_size=args.eval_batch_size_per_gpu))
-            task_names.append("MPWW_partial")
+
     else:
         assert args.eval_mpww_file is None
 
