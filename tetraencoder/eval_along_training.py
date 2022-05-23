@@ -15,11 +15,13 @@ from train import build_evaluators
 datasets.logging.set_verbosity_error()
 
 
-def evaluate(model_path, sequential_evaluator, task_names, batch_size, wandb_log=False, max_seq_length=512,
+def evaluate(model_path, sequential_evaluator, task_names, batch_size, wandb_log=False, max_seq_length=512, fp16=False,
              is_main_process=True):
     # Build model
     model = SentenceTransformer(model_path, add_pooling_layer=False)
     model.max_seq_length = max_seq_length
+    if fp16:
+        model = model.half()
 
     # reloading an existing model
     training_step = int(model_path.split("/")[-1])
@@ -62,6 +64,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # model args
     parser.add_argument("--max_seq_length", default=512, type=int)
+    parser.add_argument("--fp16", action="store_true")
     # i/o args
     parser.add_argument("--checkpoints_folder", default=None, required=True, type=str)
     parser.add_argument("--only_last_checkpoint", action="store_true")
@@ -126,4 +129,4 @@ if __name__ == "__main__":
 
     for subfolder in tqdm(subfolders):
         evaluate(subfolder, sequential_evaluator, task_names, batch_size, wandb_log=args.wandb,
-                 max_seq_length=args.max_seq_length, is_main_process=is_main_process)
+                 max_seq_length=args.max_seq_length, is_main_process=is_main_process, fp16=args.fp16)
