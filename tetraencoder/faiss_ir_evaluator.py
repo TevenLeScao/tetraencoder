@@ -426,7 +426,7 @@ class FaissIREvaluator(SentenceEvaluator):
                 [corpus_chunk[start: start + batch_size] for start in range(0, len(corpus_chunk), batch_size)],
                 desc=f"GPU {device_rank} chunks"):
             embeddings = model.encode(batch, show_progress_bar=False, convert_to_numpy=False, convert_to_tensor=True,
-                                      batch_size=batch_size, device=device)
+                                            batch_size=batch_size, device=device)
             if normalize:
                 embeddings = F.normalize(embeddings, p=2, dim=-1)
             queue.put(embeddings)

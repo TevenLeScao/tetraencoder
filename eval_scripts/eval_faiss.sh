@@ -4,8 +4,8 @@ python /home/teven_huggingface_co/tetraencoder/tetraencoder/eval_along_training.
 --eval_batch_size_per_gpu 256 \
 --max_seq_length 384 \
 --run_name baseline \
---eval_mpww_file /home/teven_huggingface_co/tetraencoder/datasets/MPWW/mpww.jsonl \
---eval_mpww_passages_file /home/teven_huggingface_co/tetraencoder/datasets/MPWW/passages_with_matches.csv \
---faiss_index_training_samples 163840 \
+--eval_mpww_file /home/teven_huggingface_co/tetraencoder/datasets/MPWW_filtered/mpww_filtered.jsonl \
+--eval_mpww_passages_file /home/teven_huggingface_co/tetraencoder/datasets/MPWW_filtered/passages_with_matches_filtered.csv \
+--faiss_index_training_samples 16384 \
 --run_name $2 \
 --wandb

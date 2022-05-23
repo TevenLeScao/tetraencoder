@@ -12,7 +12,7 @@ from sentence_transformers.evaluation import SequentialEvaluator
 from torch.utils.data import DataLoader
 
 from dataset_wrappers import *
-from faiss_ir_evaluator import FaissIREvaluator
+from matmul_ir_evaluator import MatmulIREvaluator
 from translation_evaluator_with_recall import TranslationEvaluatorWithRecall
 from util import nullcontext
 
@@ -77,11 +77,15 @@ def build_evaluators(args):    # Create evaluators
             corpus = {i: passage for i, passage in enumerate(passages["text"])}
             relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
             evaluators.append(
-                FaissIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
-                                 corpus_chunk_size=args.eval_corpus_chunk_size, precision_recall_at_k=[10],
+                MatmulIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False, precision_recall_at_k=[10],
                                  accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
-                                 score_function='cos_sim', index_training_samples=args.faiss_index_training_samples,
-                                 faiss_gpu=args.faiss_gpu))
+                                 score_function='cos_sim', index_training_samples=args.index_training_samples))
+            # evaluators.append(
+            #     FaissIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
+            #                      corpus_chunk_size=args.eval_corpus_chunk_size, precision_recall_at_k=[10],
+            #                      accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
+            #                      score_function='cos_sim', index_training_samples=args.index_training_samples,
+            #                      faiss_gpu=args.faiss_gpu))
             task_names.append("MPWW")
         else:
             evaluators.append(
@@ -137,7 +141,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_mpww_file", default=None, type=str)
     parser.add_argument("--eval_mpww_passages_file", default=None, type=str)
     parser.add_argument("--eval_corpus_chunk_size", default=16384, type=int)
-    parser.add_argument("--faiss_index_training_samples", default=40*4096, type=int)
+    parser.add_argument("--index_training_samples", default=4096, type=int)
     parser.add_argument("--faiss_gpu", action="store_true")
     # instrumentation
     parser.add_argument("--profile", action="store_true")
