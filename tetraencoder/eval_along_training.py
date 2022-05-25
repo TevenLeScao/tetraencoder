@@ -38,16 +38,16 @@ def evaluate(model_path, sequential_evaluator, task_names, batch_size, wandb_log
     # logging
     if wandb_log and is_main_process:
         for i, task_name in enumerate(task_names):
-            if task_name == "MPWW":
-                wandb.log({f"MPWW_accuracy@1": scores[i]["accuracy@k"][1],
+            if task_name in ["MPWW", "MPWW_filtered"]:
+                wandb.log({f"{task_name}_accuracy@1": scores[i]["accuracy@k"][1],
                            "data_points": seen_items})
-                wandb.log({f"MPWW_recall@10": scores[i]["recall@k"][10],
+                wandb.log({f"{task_name}_recall@10": scores[i]["recall@k"][10],
                            "data_points": seen_items})
                 wandb.log(
-                    {f"MPWW_precision@10": scores[i]["precision@k"][10],
+                    {f"{task_name}_precision@10": scores[i]["precision@k"][10],
                      "data_points": seen_items})
                 wandb.log(
-                    {f"MPWW_MRR@10": scores[i]["mrr@k"][10], "data_points": seen_items})
+                    {f"{task_name}_MRR@10": scores[i]["mrr@k"][10], "data_points": seen_items})
             else:
                 wandb.log({f"{task_name}_recall@1": scores[i]["recall@1_src2tgt"], "data_points": seen_items})
                 wandb.log(
