@@ -25,6 +25,23 @@ def pair_sims_datasets_map(examples: dict, rank: int = 0, model: SentenceTransfo
     return examples
 
 
+def all_embed_datasets_map(examples: dict, rank: int = 0, model: SentenceTransformer = None, text_key: str = "text",
+                           rdf_key: str = "rdf_linearized", batch_size: int = 16):
+    device = f"cuda:{rank % torch.cuda.device_count()}"
+    model = model.to(device)
+    embeddings1 = torch.stack(
+        model.encode(examples[text_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
+                     device=device))
+    embeddings2 = torch.stack(
+        model.encode(examples[rdf_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
+                     device=device))
+
+    examples["text_embedding"] = embeddings1.detach().cpu().numpy()
+    examples["rdf_embedding"] = embeddings2.detach().cpu().numpy()
+
+    return examples
+
+
 def all_sims(dataset1: List[str], dataset2: List[str], model: SentenceTransformer, batch_size: int):
     if torch.distributed.is_initialized():
         # axis 0 (dataset1) of variable size, axis 1 (dataset2) of constant size

@@ -1,7 +1,5 @@
 import argparse
 import os
-from collections import OrderedDict
-from functools import partial
 
 import torch
 from multiprocess import set_start_method
@@ -11,6 +9,8 @@ from sentence_transformers import SentenceTransformer
 from dataset_wrappers import *
 from util import pair_sims_datasets_map
 from embed_dataset import dataset_builders
+
+datasets.logging.set_verbosity_error()
 
 if __name__ == "__main__":
     # CUDA multiprocessing
@@ -45,15 +45,21 @@ if __name__ == "__main__":
             dataset.shuffle(seed=1066)
             dataset.select(range(args.subset))
         out_path = out_path + ".jsonl"
+
+        if "rdf_inverted" not in dataset.dataset.column_names:
+            dataset.map(partial(invert_all_triples, rdf_key="triples"), num_proc=cpu_count())
+
         dataset.filter(lambda x: len(x["triples"]) == 1 and x["rdf_inverted"] is not None)
         dataset.map(partial(invert_all_triples, rdf_key="triples"))
         if "similarity" not in dataset.dataset.column_names:
             dataset.map(
                 partial(pair_sims_datasets_map, model=model, text_key="text", rdf_key="rdf_linearized",
                         similarity_key="similarity", batch_size=args.batch_size),
-                batched=True, batch_size=args.batch_size, with_rank=True, num_proc=torch.cuda.device_count())
+                batched=True, batch_size=args.batch_size, with_rank=True, num_proc=torch.cuda.device_count(),
+                load_from_cache_file=False)
         dataset.map(
             partial(pair_sims_datasets_map, model=model, text_key="text", rdf_key="rdf_inverted",
                     similarity_key="similarity_inverted", batch_size=args.batch_size),
-            batched=True, batch_size=args.batch_size, with_rank=True, num_proc=torch.cuda.device_count())
+            batched=True, batch_size=args.batch_size, with_rank=True, num_proc=torch.cuda.device_count(),
+            load_from_cache_file=False)
         dataset.to_json(out_path)
