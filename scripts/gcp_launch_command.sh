@@ -14,5 +14,4 @@ accelerate launch tetraencoder/train.py  \
 --find_unused_parameters \
 --replaced_negatives \
 --inverted_negatives \
---wandb \
---run_name all_bs192_allneg
+--run_name test
