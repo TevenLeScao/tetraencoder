@@ -2,7 +2,7 @@ import copy
 from collections import OrderedDict
 from functools import partial
 from typing import List, Tuple
-import multiprocessing
+from multiprocessing import cpu_count
 
 import datasets
 import numpy as np
@@ -38,7 +38,7 @@ SYMMETRICAL_RELATIONSHIPS = [
 ]
 
 # general variable to use by default in num_procs
-NCPUS = multiprocessing.cpu_count()
+NCPUS = cpu_count()
 
 
 def wrap_triplets(examples, rdf_key):
@@ -210,12 +210,11 @@ class MsMarcoDataset(InputExampleDataset):
 
 
 class KelmDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, **kwargs):
         super().__init__(previous_text_key="gen_sentence", **kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
         self.uniformize_text_key()
 
     def __len__(self):
@@ -248,12 +247,11 @@ class GooAqDataset(InputExampleDataset):
 
 
 class TekgenDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, **kwargs):
         super().__init__(previous_text_key="sentence", **kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
         self.uniformize_text_key()
 
     def __len__(self):
@@ -267,12 +265,11 @@ class TekgenDataset(InputExampleDataset):
 
 
 class WebNlgDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, **kwargs):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
 
     def __len__(self):
         return len(self.dataset)
@@ -290,7 +287,7 @@ def extract_sq_triplets(examples, src_key, rdf_key):
 
 
 class SQDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, **kwargs):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("csv", data_files=data_file)["train"]
@@ -336,15 +333,15 @@ class SQDataset(InputExampleDataset):
 
 
 class GenWikiDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, **kwargs):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(GenWikiDataset.batched_fill_in_entities, batched=True, num_proc=self.map_num_proc)
         self.rename_column("text", "unfilled_text")
         self.rename_column("filled_text", "text")
+        self.rename_column("graph", "triples")
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
 
     def __len__(self):
         return len(self.dataset)
@@ -369,12 +366,11 @@ class GenWikiDataset(InputExampleDataset):
 
 
 class TRexDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, **kwargs):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
 
     def __len__(self):
         return len(self.dataset)
@@ -408,6 +404,7 @@ class MPWWDataset(InputExampleDataset):
 
 
 # train_dataset_builders - ordered so that smaller is first for `embed_datasets` so we can have results faster
-dataset_builders = OrderedDict([("webnlg", WebNlgDataset), ("genwiki", GenWikiDataset), ("tekgen", TekgenDataset),
+dataset_builders = OrderedDict([("webnlg", WebNlgDataset), ("mpww_simple", WebNlgDataset), ("genwiki", GenWikiDataset),
+                                ("tekgen", TekgenDataset),
                                 ("trex", TRexDataset), ("kelm", KelmDataset), ("msmarco", MsMarcoDataset),
                                 ("gooaq", GooAqDataset)])

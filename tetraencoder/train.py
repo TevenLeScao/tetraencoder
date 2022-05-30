@@ -149,6 +149,7 @@ if __name__ == "__main__":
     # TODO: remove after testing
     parser.add_argument("--local_rank", default=-1, type=int)
     parser.add_argument("--find_unused_parameters", action="store_true")
+    parser.add_argument("--seed", default=1951, type=int)
     # wrap-up
     args = parser.parse_args()
     print(args)
@@ -189,6 +190,7 @@ if __name__ == "__main__":
         input_filepath = vars(args)[f"{dataset_name}_file"]
         print(f"adding {dataset_name} to the corpus")
         dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath, map_num_proc=args.map_num_proc_override)
+        dataloaders[dataset_name].setup_for_training(seed=args.seed)
         if args.similarity_fraction_to_keep is not None:
             dataloaders[dataset_name].filter_by_similarity(args.similarity_fraction_to_keep)
         if args.replaced_negatives:
