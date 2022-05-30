@@ -169,7 +169,6 @@ class MatmulIREvaluator(SentenceEvaluator):
                                                normalize=self.score_function == "cos_sim", pca_training_points=self.index_training_samples)
 
         # now let's search!
-        print("searching for queries")
         queries_results_unnamed = corpus_embeddings.search(self.queries, top_k=max_k, batch_size=self.batch_size)
         queries_results_formatted = [
             [{"score": score, "corpus_id": corpus_id} for score, corpus_id in zip(query_scores, query_ids)] for

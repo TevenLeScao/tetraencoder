@@ -114,7 +114,7 @@ if __name__ == "__main__":
 
     if args.wandb and is_main_process:
         import wandb
-        wandb.init(project="rdf-embeddings-evals", entity="flukeellington", name=args.run_name)
+        wandb.init(project="rdf-embeddings-evals-paper", entity="flukeellington", name=args.run_name)
         wandb.config = {
             "batch_size": batch_size,
             "train_datasets": train_datasets,
