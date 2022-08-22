@@ -43,7 +43,6 @@ if __name__ == "__main__":
     # model args
     # instrumentation
     parser.add_argument("--wandb", action="store_true")
-    parser.add_argument("--run_name", required=True, type=str)
     parser.add_argument("--sanity", action="store_true")
     args = parser.parse_args()
     print(args)
@@ -62,14 +61,20 @@ if __name__ == "__main__":
     train_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9)))
     dev_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9), len(data_2017)))
 
-    if args.wandb:
-        wandb.init(project="rdf-crossencoder", entity="flukeellington", name=args.run_name)
-        wandb.config = {
-            "learning_rate": args.lr,
-            "epochs": args.num_epochs,
-            "batch_size": args.train_batch_size_per_gpu,
-        }
+    bleu_pearson = pearsonr(dev_dataset["bleu"], dev_dataset["semantic_adequacy"])[0]
+    meteor_pearson = pearsonr(dev_dataset["meteor"], dev_dataset["semantic_adequacy"])[0]
+    ter_pearson = pearsonr(dev_dataset["ter"], dev_dataset["semantic_adequacy"])[0]
 
-    bleu_pearson = pearsonr(dev_dataset["bleu"], dev_dataset["semantic_adequacy"])
-    meteor_pearson = pearsonr(dev_dataset["meteor"], dev_dataset["semantic_adequacy"])
-    ter_pearson = pearsonr(dev_dataset["ter"], dev_dataset["semantic_adequacy"])
+
+    if args.wandb:
+        run = wandb.init(project="rdf-crossencoder", entity="flukeellington", name="BLEU", reinit=True)
+        wandb.log({"correlation": bleu_pearson, "epoch": 0, "step": 0})
+        run.finish()
+
+        run = wandb.init(project="rdf-crossencoder", entity="flukeellington", name="METEOR", reinit=True)
+        wandb.log({"correlation": meteor_pearson, "epoch": 0, "step": 0})
+        run.finish()
+
+        run = wandb.init(project="rdf-crossencoder", entity="flukeellington", name="TER", reinit=True)
+        wandb.log({"correlation": ter_pearson, "epoch": 0, "step": 0})
+        run.finish()

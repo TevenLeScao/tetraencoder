@@ -149,7 +149,7 @@ class BetterCrossEncoder(CrossEncoder):
                     score = self._eval_during_training(evaluator, output_path, save_best_model, epoch, training_steps, callback)
 
                     if log_wandb:
-                        wandb.log({"cross_encoder_performance": score, "epoch": epoch, "step": training_steps})
+                        wandb.log({"correlation": score, "epoch": epoch, "step": training_steps})
 
                     self.model.zero_grad()
                     self.model.train()
