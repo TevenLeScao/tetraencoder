@@ -10,7 +10,7 @@ from sentence_transformers.cross_encoder.evaluation import CECorrelationEvaluato
 from torch import nn
 from torch.utils.data import DataLoader
 
-from better_cross_encoder import BetterCrossEncoder
+from better_cross_encoder import BetterCrossEncoder, PearsonCorrelationEvaluator
 
 logging.basicConfig(format='%(asctime)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(train_samples, shuffle=True, batch_size=args.train_batch_size_per_gpu)
 
     # We add an evaluator, which evaluates the performance during training
-    evaluator = CECorrelationEvaluator.from_input_examples(dev_samples, name='sem_adequacy_dev')
+    evaluator = PearsonCorrelationEvaluator.from_input_examples(dev_samples, name='sem_adequacy_dev')
 
     # Configure the training
     warmup_steps = math.ceil(len(train_dataloader) * args.num_epochs * 0.1)  # 10% of train data for warm-up

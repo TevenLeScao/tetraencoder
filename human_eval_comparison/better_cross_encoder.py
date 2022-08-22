@@ -1,16 +1,22 @@
+import csv
+import logging
 import os
 from typing import Dict, Type, Callable
 
 import torch
 import transformers
 import wandb
+from scipy.stats import pearsonr, spearmanr
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.cross_encoder import CrossEncoder
+from sentence_transformers.cross_encoder.evaluation import CECorrelationEvaluator
 from sentence_transformers.evaluation import SentenceEvaluator
 from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm.autonotebook import tqdm, trange
+
+logger = logging.getLogger(__name__)
 
 
 class BetterCrossEncoder(CrossEncoder):
@@ -160,3 +166,35 @@ class BetterCrossEncoder(CrossEncoder):
                     self.save(output_path)
 
             return score
+
+class PearsonCorrelationEvaluator(CECorrelationEvaluator):
+
+    def __call__(self, model, output_path: str = None, epoch: int = -1, steps: int = -1) -> float:
+        if epoch != -1:
+            if steps == -1:
+                out_txt = " after epoch {}:".format(epoch)
+            else:
+                out_txt = " in epoch {} after {} steps:".format(epoch, steps)
+        else:
+            out_txt = ":"
+
+        logger.info("CECorrelationEvaluator: Evaluating the model on " + self.name + " dataset" + out_txt)
+        pred_scores = model.predict(self.sentence_pairs, convert_to_numpy=True, show_progress_bar=False)
+
+
+        eval_pearson, _ = pearsonr(self.scores, pred_scores)
+        eval_spearman, _ = spearmanr(self.scores, pred_scores)
+
+        logger.info("Correlation:\tPearson: {:.4f}\tSpearman: {:.4f}".format(eval_pearson, eval_spearman))
+
+        if output_path is not None and self.write_csv:
+            csv_path = os.path.join(output_path, self.csv_file)
+            output_file_exists = os.path.isfile(csv_path)
+            with open(csv_path, mode="a" if output_file_exists else 'w', encoding="utf-8") as f:
+                writer = csv.writer(f)
+                if not output_file_exists:
+                    writer.writerow(self.csv_headers)
+
+                writer.writerow([epoch, steps, eval_pearson, eval_spearman])
+
+        return eval_pearson
