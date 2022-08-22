@@ -6,7 +6,6 @@ from datetime import datetime
 import datasets
 import wandb
 from sentence_transformers import InputExample, LoggingHandler
-from sentence_transformers.cross_encoder.evaluation import CECorrelationEvaluator
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -63,7 +62,8 @@ if __name__ == "__main__":
     # instrumentation
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run_name", required=True, type=str)
-    parser.add_argument("--scheduler", default="warmupcosine", choices=["warmupcosine", "warmuplinear", "warmupcosinewithhardrestarts"])
+    parser.add_argument("--scheduler", default="warmupcosine",
+                        choices=["warmupcosine", "warmuplinear", "warmupcosinewithhardrestarts"])
     parser.add_argument("--sanity", action="store_true")
     args = parser.parse_args()
     print(args)
@@ -83,16 +83,18 @@ if __name__ == "__main__":
     bounds = min(data_2017["semantic_adequacy"]), max(data_2017["semantic_adequacy"])
     def normalize_rating(score):
         return (score - bounds[0]) / (bounds[1] - bounds[0])
+    data_2017.map(lambda example: {k: normalize_rating(v) if k == "semantic_adequacy" else v for k, v in example.items()})
 
-    for i, row in enumerate(data_2017):
+    train_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9)))
+    dev_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9), len(data_2017)))
 
-        if i / len(data_2017) > 0.9:
-            dev_samples.append(InputExample(texts=[row['text'], row['mr_processed']],
-                                            label=float(normalize_rating(row['semantic_adequacy']))))
-        else:
-            train_samples.append(InputExample(texts=[row['text'], row['mr_processed']],
-                                              label=float(normalize_rating(row['semantic_adequacy']))))
-            # train_samples.append(InputExample(texts=[row['sentence2'], row['sentence1']], label=float(row['semantic_adequacy']) / normalizer))
+    for i, row in enumerate(train_dataset):
+        train_samples.append(InputExample(texts=[row['text'], row['mr_processed']],
+                                          label=row['semantic_adequacy']))
+
+    for i, row in enumerate(dev_dataset):
+        dev_samples.append(InputExample(texts=[row['text'], row['mr_processed']],
+                                        label=row['semantic_adequacy']))
 
     # We wrap train_samples (which is a List[InputExample]) into a pytorch DataLoader
     train_dataloader = DataLoader(train_samples, shuffle=True, batch_size=args.train_batch_size_per_gpu)
