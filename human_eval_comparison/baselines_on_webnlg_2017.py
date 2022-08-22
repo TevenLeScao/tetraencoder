@@ -54,13 +54,10 @@ if __name__ == "__main__":
     if args.sanity:
         data_2017 = data_2017.select(range(40))
 
-    train_samples = []
-    dev_samples = []
-
     bounds = min(data_2017["semantic_adequacy"]), max(data_2017["semantic_adequacy"])
     def normalize_rating(score):
         return (score - bounds[0]) / (bounds[1] - bounds[0])
-    data_2017.map(lambda example: {k: normalize_rating(v) if k == "semantic_adequacy" else v for k, v in example.items()})
+    data_2017 = data_2017.map(lambda example: {k: normalize_rating(v) if k == "semantic_adequacy" else v for k, v in example.items()})
 
     train_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9)))
     dev_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9), len(data_2017)))
