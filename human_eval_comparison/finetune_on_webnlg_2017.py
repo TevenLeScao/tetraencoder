@@ -72,7 +72,7 @@ if __name__ == "__main__":
     model = BetterCrossEncoder(args.model_name_or_path, num_labels=1)
 
     data_2017 = datasets.load_dataset("csv", data_files="raw_data/2017_scores.csv")["train"].filter(
-        lambda example: example['text'] is not None).shuffle()
+        lambda example: example['text'] is not None and len(example['text']) > 0).shuffle(seed=args.seed)
     data_2017 = data_2017.map(convert_2017_rdf, batched=True)
     if args.sanity:
         data_2017 = data_2017.select(range(40))
