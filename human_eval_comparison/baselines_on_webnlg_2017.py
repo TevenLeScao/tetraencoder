@@ -69,13 +69,13 @@ if __name__ == "__main__":
 
     if args.wandb:
         run = wandb.init(project="rdf-crossencoder", entity="flukeellington", name="BLEU", reinit=True)
-        wandb.log({"correlation": bleu_pearson, "epoch": 0, "step": 0})
+        wandb.log({"correlation": bleu_pearson, "epoch": 0, "step": 0, "data_points": 0})
         run.finish()
 
         run = wandb.init(project="rdf-crossencoder", entity="flukeellington", name="METEOR", reinit=True)
-        wandb.log({"correlation": meteor_pearson, "epoch": 0, "step": 0})
+        wandb.log({"correlation": meteor_pearson, "epoch": 0, "step": 0, "data_points": 0})
         run.finish()
 
         run = wandb.init(project="rdf-crossencoder", entity="flukeellington", name="TER", reinit=True)
-        wandb.log({"correlation": ter_pearson, "epoch": 0, "step": 0})
+        wandb.log({"correlation": ter_pearson, "epoch": 0, "step": 0, "data_points": 0})
         run.finish()
