@@ -4,8 +4,12 @@ import math
 from datetime import datetime
 
 import datasets
+import random
+
+import numpy as np
+import torch
 import wandb
-from sentence_transformers import InputExample, LoggingHandler
+from sentence_transformers import InputExample, LoggingHandler, SentenceTransformer, losses
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -58,6 +62,7 @@ if __name__ == "__main__":
     # training args
     parser.add_argument("--train_batch_size_per_gpu", default=64, type=int)
     parser.add_argument("--num_epochs", default=5, type=int)
+    parser.add_argument("--early_stopping", default=-1, type=int)
     parser.add_argument("--lr", default=1e-5, type=float)
     # instrumentation
     parser.add_argument("--wandb", action="store_true")
@@ -65,13 +70,19 @@ if __name__ == "__main__":
     parser.add_argument("--scheduler", default="warmupcosine",
                         choices=["warmupcosine", "warmuplinear", "warmupcosinewithhardrestarts"])
     parser.add_argument("--sanity", action="store_true")
+    parser.add_argument("--seed", default=0, type=int)
+    parser.add_argument("--biencoder", action="store_true")
+
     args = parser.parse_args()
     print(args)
 
-    model_save_path = f'webnlg_cross_encoders/{args.run_name}/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}'
-    model = BetterCrossEncoder(args.model_name_or_path, num_labels=1)
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    np.random.seed(0)
 
-    data_2017 = datasets.load_dataset("csv", data_files="raw_data/2017_scores.csv")["train"].filter(
+    model_save_path = f'webnlg_{"bi" if args.biencoder else "cross"}_encoders/{args.run_name}/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}'
+
+    data_2017 = datasets.load_dataset("teven/webnlg_2017_human_eval")["train"].filter(
         lambda example: example['text'] is not None and len(example['text']) > 0).shuffle(seed=args.seed)
     data_2017 = data_2017.map(convert_2017_rdf, batched=True)
     if args.sanity:
@@ -114,17 +125,40 @@ if __name__ == "__main__":
         }
 
     # Train the model
-    model.fit(train_dataloader=train_dataloader,
-              evaluator=evaluator,
-              epochs=args.num_epochs,
-              warmup_steps=warmup_steps,
-              scheduler=args.scheduler,
-              output_path=model_save_path,
-              optimizer_params={"lr": args.lr},
-              evaluation_steps=len(train_dataloader),
-              activation_fct=nn.Sigmoid(),
-              loss_fct=nn.SmoothL1Loss(),
-              log_wandb=args.wandb)
+    if args.biencoder:
+        model = SentenceTransformer(args.model_name_or_path)
+        train_loss = losses.CosineSimilarityLoss(model=model)
+        def train_callback(score, epoch, steps):
+            wandb.log({"bi_encoder_loss": score.item(), "step": steps, "data_points": steps * train_dataloader.batch_size})
+
+        def eval_callback(score, epoch, steps):
+            wandb.log({"correlation": score, "epoch": epoch, "step": steps, "data_points": steps * train_dataloader.batch_size})
+
+        model.fit(train_objectives=[(train_dataloader, train_loss)],
+                  evaluator=evaluator,
+                  epochs=args.num_epochs,
+                  warmup_steps=warmup_steps,
+                  scheduler=args.scheduler,
+                  output_path=model_save_path,
+                  optimizer_params={"lr": args.lr},
+                  train_callback=train_callback,
+                  eval_callback=eval_callback,
+                  logging_steps=1,
+                  full_scores_callbacks=False)
+    else:
+        model = BetterCrossEncoder(args.model_name_or_path, num_labels=1)
+        model.fit(train_dataloader=train_dataloader,
+                  evaluator=evaluator,
+                  epochs=args.num_epochs,
+                  early_stopping=args.early_stopping,
+                  warmup_steps=warmup_steps,
+                  scheduler=args.scheduler,
+                  output_path=model_save_path,
+                  optimizer_params={"lr": args.lr},
+                  evaluation_steps=len(train_dataloader),
+                  activation_fct=nn.Sigmoid(),
+                  loss_fct=nn.SmoothL1Loss(),
+                  log_wandb=args.wandb)
 
     ##### Load model and eval on test set
     model = BetterCrossEncoder(model_save_path)

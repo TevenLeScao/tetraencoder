@@ -4,6 +4,7 @@ import os
 from typing import Dict, Type, Callable
 
 import torch
+import torch.nn.functional as F
 import transformers
 import wandb
 from scipy.stats import pearsonr, spearmanr
@@ -25,6 +26,7 @@ class BetterCrossEncoder(CrossEncoder):
             train_dataloader: DataLoader,
             evaluator: SentenceEvaluator = None,
             epochs: int = 1,
+            early_stopping: int = -1,
             loss_fct=None,
             activation_fct=nn.Identity(),
             scheduler: str = 'WarmupLinear',
@@ -81,6 +83,7 @@ class BetterCrossEncoder(CrossEncoder):
             os.makedirs(output_path, exist_ok=True)
 
         self.best_score = -9999999
+        self.tries = 0
         num_train_steps = int(len(train_dataloader) * epochs)
 
         # Prepare optimizers
@@ -138,7 +141,7 @@ class BetterCrossEncoder(CrossEncoder):
                 optimizer.zero_grad()
 
                 if log_wandb:
-                    wandb.log({'lr': scheduler.get_lr()[0], "cross_encoder_loss": loss_value.item(), "step": training_steps})
+                    wandb.log({'lr': scheduler.get_lr()[0], "cross_encoder_loss": loss_value.item(), "step": training_steps, "data_points": training_steps * train_dataloader.batch_size})
 
                 if not skip_scheduler:
                     scheduler.step()
@@ -149,27 +152,47 @@ class BetterCrossEncoder(CrossEncoder):
                     score = self._eval_during_training(evaluator, output_path, save_best_model, epoch, training_steps, callback)
 
                     if log_wandb:
-                        wandb.log({"correlation": score, "epoch": epoch, "step": training_steps})
+                        wandb.log({"correlation": score, "epoch": epoch, "step": training_steps, "data_points": training_steps * train_dataloader.batch_size})
 
                     self.model.zero_grad()
                     self.model.train()
 
+                    if self.tries >= early_stopping > 0:
+                        logger.info(f"EARLY STOPPING AT EPOCH {epoch}")
+                        return self.best_score
+
+        return self.best_score
+
     def _eval_during_training(self, evaluator, output_path, save_best_model, epoch, steps, callback):
+
+        if output_path is not None:
+            os.makedirs(output_path, exist_ok=True)
+            eval_path = os.path.join(output_path, "eval")
+            os.makedirs(eval_path, exist_ok=True)
+            best_model_path = os.path.join(output_path, "best_model")
+            os.makedirs(best_model_path, exist_ok=True)
+        else:
+            eval_path = None
+            best_model_path = None
+
         """Runs evaluation during the training"""
         if evaluator is not None:
-            score = evaluator(self, output_path=output_path, epoch=epoch, steps=steps)
+            score = evaluator(self, output_path=eval_path, epoch=epoch, steps=steps)
             if callback is not None:
                 callback(score, epoch, steps)
             if score > self.best_score:
                 self.best_score = score
+                self.tries = 0
                 if save_best_model:
-                    self.save(output_path)
+                    self.save(best_model_path)
+            else:
+                self.tries += 1
 
             return score
 
 class PearsonCorrelationEvaluator(CECorrelationEvaluator):
 
-    def __call__(self, model, output_path: str = None, epoch: int = -1, steps: int = -1) -> float:
+    def __call__(self, model, output_path: str = None, epoch: int = -1, steps: int = -1, return_all_scores=False) -> float:
         if epoch != -1:
             if steps == -1:
                 out_txt = " after epoch {}:".format(epoch)
@@ -179,8 +202,20 @@ class PearsonCorrelationEvaluator(CECorrelationEvaluator):
             out_txt = ":"
 
         logger.info("CECorrelationEvaluator: Evaluating the model on " + self.name + " dataset" + out_txt)
-        pred_scores = model.predict(self.sentence_pairs, convert_to_numpy=True, show_progress_bar=False)
 
+        if isinstance(model, CrossEncoder):
+            pred_scores = model.predict(self.sentence_pairs, convert_to_numpy=True, show_progress_bar=False)
+        elif isinstance(model, SentenceTransformer):
+
+            texts1 = [pair[0] for pair in self.sentence_pairs]
+            texts2 = [pair[1] for pair in self.sentence_pairs]
+            embeddings1 = torch.stack(
+                model.encode(texts1, show_progress_bar=False, convert_to_numpy=False))
+            embeddings2 = torch.stack(
+                model.encode(texts2, show_progress_bar=False, convert_to_numpy=False))
+            pred_scores = F.cosine_similarity(embeddings1, embeddings2).detach().cpu().numpy()
+        else:
+            raise ValueError
 
         eval_pearson, _ = pearsonr(self.scores, pred_scores)
         eval_spearman, _ = spearmanr(self.scores, pred_scores)
@@ -197,4 +232,7 @@ class PearsonCorrelationEvaluator(CECorrelationEvaluator):
 
                 writer.writerow([epoch, steps, eval_pearson, eval_spearman])
 
-        return eval_pearson
+        if return_all_scores:
+            return [eval_pearson, eval_spearman]
+        else:
+            return eval_pearson

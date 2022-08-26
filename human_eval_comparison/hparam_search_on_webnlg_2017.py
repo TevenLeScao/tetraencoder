@@ -11,7 +11,7 @@ import torch
 import wandb
 
 import datasets
-from sentence_transformers import InputExample, LoggingHandler
+from sentence_transformers import InputExample, LoggingHandler, SentenceTransformer, losses
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -97,25 +97,58 @@ def train(config):
     evaluator = PearsonCorrelationEvaluator.from_input_examples(dev_samples, name='sem_adequacy_dev')
 
     warmup_steps = math.ceil(len(train_dataloader) * NUM_EPOCHS * 0.1)  # 10% of train data for warm-up
-
-    model = BetterCrossEncoder(config["model_name_or_path"], num_labels=1, device="cuda")
     # Train the model
     run = wandb.init(project="rdf-crossencoder", entity="flukeellington",
-                     name=f"{config['model_name_or_path'].split('/')[-1]}_lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}",
+                     name=f"{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}_lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}",
                      reinit=True)
-    best_score = model.fit(train_dataloader=train_dataloader,
-                           evaluator=evaluator,
-                           epochs=NUM_EPOCHS,
-                           warmup_steps=warmup_steps,
+    wandb.config = {
+        "learning_rate": config["lr"],
+        "epochs": NUM_EPOCHS,
+        "batch_size": config["train_batch_size_per_gpu"],
+        "biencoder": config["biencoder"],
+        "base_model": config["model_name_or_path"]
+    }
+
+    if config["biencoder"]:
+        model = SentenceTransformer(config["model_name_or_path"])
+        train_loss = losses.CosineSimilarityLoss(model=model)
+        def train_callback(score, epoch, steps):
+            wandb.log({"bi_encoder_loss": score.item(), "step": steps, "data_points": steps * train_dataloader.batch_size})
+
+        def eval_callback(score, epoch, steps):
+            wandb.log({"correlation": score, "epoch": epoch, "step": steps, "data_points": steps * train_dataloader.batch_size})
+
+        model.fit(train_objectives=[(train_dataloader, train_loss)],
+                  evaluator=evaluator,
+                  epochs=NUM_EPOCHS,
+                  warmup_steps=warmup_steps,
                            scheduler="warmupcosine",
-                           optimizer_params={"lr": config["lr"]},
-                           evaluation_steps=len(train_dataloader),
-                           activation_fct=nn.Sigmoid(),
-                           loss_fct=nn.SmoothL1Loss(),
-                           show_progress_bar=False,
-                           log_wandb=True,
-                           output_path=f"{config['model_name_or_path'].split('/')[-1]}/lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}",
-                           early_stopping=EARLY_STOPPING)
+                  output_path=config["output_path"],
+                  optimizer_params={"lr": config["lr"]},
+                  train_callback=train_callback,
+                  eval_callback=eval_callback,
+                  logging_steps=1,
+                  full_scores_callbacks=False,
+                  show_progress_bar=False,
+                  early_stopping=EARLY_STOPPING)
+        best_score = model.best_score
+
+    else:
+        model = BetterCrossEncoder(config["model_name_or_path"], num_labels=1)
+        best_score = model.fit(train_dataloader=train_dataloader,
+                               evaluator=evaluator,
+                               epochs=NUM_EPOCHS,
+                               warmup_steps=warmup_steps,
+                               scheduler="warmupcosine",
+                               optimizer_params={"lr": config["lr"]},
+                               evaluation_steps=len(train_dataloader),
+                               activation_fct=nn.Sigmoid(),
+                               loss_fct=nn.SmoothL1Loss(),
+                               show_progress_bar=False,
+                               log_wandb=True,
+                               output_path=config["output_path"],
+                               early_stopping=EARLY_STOPPING)
+
     wandb.log({"best_correlation": best_score})
     run.finish()
     return best_score
@@ -125,8 +158,8 @@ if __name__ == "__main__":
     assert torch.cuda.is_available()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name_or_path", default="sentence-transformers/all-mpnet-base-v2",
-                        type=str)  # "../outputs/small_bs_runs_allneg/all_bs160_allneg" "../outputs/small_bs_runs/all_datasets_bs320-2022-01-11_02-41-31"
+    parser.add_argument("--model_name_or_path", default="sentence-transformers/all-mpnet-base-v2", type=str)  # "../outputs/small_bs_runs_allneg/all_bs160_allneg" "../outputs/small_bs_runs/all_datasets_bs320-2022-01-11_02-41-31"
+    parser.add_argument("--biencoder", action="store_true")
     args = parser.parse_args()
 
     torch.manual_seed(SEED)
@@ -134,9 +167,12 @@ if __name__ == "__main__":
     np.random.seed(SEED)
 
     search_space = {"lr": [1e-6, 2e-6, 5e-6, 1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3],
-                    "train_batch_size_per_gpu": [8, 16, 32, 64, 128]}
+                    "train_batch_size_per_gpu": [8, 16, 32, 64, 96]}
 
     for lr in search_space["lr"]:
         for batch_size in search_space["train_batch_size_per_gpu"]:
-            config = {"model_name_or_path": args.model_name_or_path, "lr": lr, "train_batch_size_per_gpu": batch_size}
+            config = {"model_name_or_path": args.model_name_or_path, "lr": lr, "train_batch_size_per_gpu": batch_size, "biencoder": args.biencoder}
+            config["output_path"] = f"{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}/lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}"
+            if os.path.isdir(os.path.join(config["output_path"], "best_model")):
+                continue
             train(config)
