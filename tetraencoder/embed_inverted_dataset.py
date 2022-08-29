@@ -47,7 +47,7 @@ if __name__ == "__main__":
         out_path = out_path + ".jsonl"
 
         if "rdf_inverted" not in dataset.dataset.column_names:
-            dataset.map(partial(invert_all_triples, rdf_key="triples"), num_proc=cpu_count())
+            dataset.map(partial(invert_all_triples, rdf_key="triples"), num_proc=os.cpu_count())
 
         dataset.filter(lambda x: len(x["triples"]) == 1 and x["rdf_inverted"] is not None)
         dataset.map(partial(invert_all_triples, rdf_key="triples"))
