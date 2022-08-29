@@ -3,7 +3,7 @@ from typing import List
 
 import numpy as np
 import torch
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from sentence_transformers.util import cos_sim, mismatched_sizes_all_gather
 from torch.nn import functional as F
 
@@ -11,16 +11,24 @@ from torch.nn import functional as F
 def pair_sims_datasets_map(examples: dict, rank: int = 0, model: SentenceTransformer = None, text_key: str = "text",
                            rdf_key: str = "rdf_linearized", batch_size: int = 16, similarity_key: str = "similarity"):
     device = f"cuda:{rank % torch.cuda.device_count()}"
-    model = model.to(device)
-    embeddings1 = torch.stack(
-        model.encode(examples[text_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
-                     device=device))
-    embeddings2 = torch.stack(
-        model.encode(examples[rdf_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
-                     device=device))
+    if isinstance(model, SentenceTransformer):
+        model = model.to(device)
+        embeddings1 = torch.stack(
+            model.encode(examples[text_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
+                         device=device))
+        embeddings2 = torch.stack(
+            model.encode(examples[rdf_key], show_progress_bar=False, convert_to_numpy=False, batch_size=batch_size,
+                         device=device))
 
-    cos_sims = F.cosine_similarity(embeddings1, embeddings2).detach().cpu().numpy()
-    examples[similarity_key] = cos_sims
+        cos_sims = F.cosine_similarity(embeddings1, embeddings2).detach().cpu().numpy()
+        examples[similarity_key] = cos_sims
+
+    elif isinstance(model, CrossEncoder):
+        predictions = model.predict(list(zip(examples[text_key], examples[rdf_key])), batch_size=batch_size)
+        examples[similarity_key] = predictions
+
+    else:
+        raise ValueError
 
     return examples
 
