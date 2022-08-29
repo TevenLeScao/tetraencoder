@@ -10,7 +10,10 @@ from torch.nn import functional as F
 
 def pair_sims_datasets_map(examples: dict, rank: int = 0, model: SentenceTransformer = None, text_key: str = "text",
                            rdf_key: str = "rdf_linearized", batch_size: int = 16, similarity_key: str = "similarity"):
-    device = f"cuda:{rank % torch.cuda.device_count()}"
+    if rank is None:
+        device = "cuda:0"
+    else:
+        device = f"cuda:{rank % torch.cuda.device_count()}"
     if isinstance(model, SentenceTransformer):
         model = model.to(device)
         embeddings1 = torch.stack(
