@@ -80,18 +80,18 @@ if __name__ == "__main__":
         [
             ("all_bs160_allneg", SentenceTransformer(
                 "teven/all_bs160_allneg")),
-            # ("all_bs192_hardneg", SentenceTransformer(
-            #     "teven/all_bs192_hardneg")),
-            # ("cross_all_bs160_allneg", CrossEncoder(
-            #     "output/allneg_good_outlier"))
-        # ] + [
-        #     (f"finetuned_{path.split('/')[0]}", CrossEncoder(
-        #         f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
-        #     "cross_" in path
-        # ] + [
-        #     (f"finetuned_{path.split('/')[0]}", SentenceTransformer(
-        #         f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
-        #     "bi_" in path
+            ("all_bs192_hardneg", SentenceTransformer(
+                "teven/all_bs192_hardneg")),
+            ("cross_all_bs160_allneg", CrossEncoder(
+                "output/allneg_good_outlier"))
+        ] + [
+            (f"finetuned_{path.split('/')[0]}", CrossEncoder(
+                f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
+            "cross_" in path
+        ] + [
+            (f"finetuned_{path.split('/')[0]}", SentenceTransformer(
+                f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
+            "bi_" in path
         ]
     )
 
