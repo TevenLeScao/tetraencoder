@@ -43,7 +43,7 @@ if __name__ == "__main__":
         human_scores_per_team[item["submission_id"]].append(item)
 
     # the last line is inconsistent, let's just fix this
-    rdfs = open(os.path.join("raw_data", "unwrapped_rdfs.txt")).readlines()[:1779]
+    rdfs = [item[:-1] for item in open(os.path.join("raw_data", "unwrapped_rdfs.txt")).readlines()[:1779]]
     ticks = ["correctness", "data coverage", "relevance", "fluency", "text structure", "bert precision",
              "bert recall", "bert F1", "bleurt", "bleu"]
 
@@ -56,7 +56,6 @@ if __name__ == "__main__":
             print(team)
             all_auto_scores = json.load(open(os.path.join(candidate_folder, "primary.en_results")))
             all_bleurt_scores = json.load(open(os.path.join(candidate_folder, "primary.en_results_bleurt")))
-            all_hypotheses = open(os.path.join(candidate_folder, "primary.en")).readlines()[:1779]
 
             for item in human_scores_per_team[team]:
                 sample_id = int(item["sample_id"]) - 1
@@ -77,22 +76,24 @@ if __name__ == "__main__":
     rdfs = open(os.path.join("raw_data", "unwrapped_rdfs.txt")).readlines()[:1779]
 
     hparam_search_results = open("best_models_hparam_search.txt").readlines()
-    models = OrderedDict([
-                             ("all_bs160_allneg", SentenceTransformer(
-                                 "teven/all_bs160_allneg")),
-                             ("all_bs192_hardneg", SentenceTransformer(
-                                 "teven/all_bs192_hardneg")),
-                             ("cross_all_bs160_allneg", CrossEncoder(
-                                 "output/allneg_good_outlier"))
-                         ] + [
-                             (f"finetuned_{path.split('/')[0]}", CrossEncoder(
-                                 f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
-                             "cross_" in path
-                         ] + [
-                             (f"finetuned_{path.split('/')[0]}", SentenceTransformer(
-                                 f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
-                             "bi_" in path
-                         ])
+    models = OrderedDict(
+        [
+            ("all_bs160_allneg", SentenceTransformer(
+                "teven/all_bs160_allneg")),
+            # ("all_bs192_hardneg", SentenceTransformer(
+            #     "teven/all_bs192_hardneg")),
+            # ("cross_all_bs160_allneg", CrossEncoder(
+            #     "output/allneg_good_outlier"))
+        # ] + [
+        #     (f"finetuned_{path.split('/')[0]}", CrossEncoder(
+        #         f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
+        #     "cross_" in path
+        # ] + [
+        #     (f"finetuned_{path.split('/')[0]}", SentenceTransformer(
+        #         f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
+        #     "bi_" in path
+        ]
+    )
 
     for model_name, model in models.items():
         if model_name not in data_2020.keys():
@@ -101,7 +102,8 @@ if __name__ == "__main__":
 
             for candidate_folder in tqdm(candidate_folders):
                 team = candidate_folder.split("/")[-1]
-                all_hypotheses = open(os.path.join(candidate_folder, "primary.en")).readlines()[:1779]
+                all_hypotheses = [item[:-1] for item in
+                                  open(os.path.join(candidate_folder, "primary.en")).readlines()[:1779]]
 
                 if isinstance(model, CrossEncoder):
                     all_sim_scores = cross_sims(model, all_hypotheses, rdfs)
