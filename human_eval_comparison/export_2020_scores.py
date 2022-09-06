@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from tqdm import tqdm
 from scipy.stats import spearmanr
+from questeval.questeval_metric import QuestEval
 
 SCORE_FILE = "2020_scores.json"
 
@@ -45,7 +46,7 @@ if __name__ == "__main__":
     # the last line is inconsistent, let's just fix this
     rdfs = [item[:-1] for item in open(os.path.join("raw_data", "unwrapped_rdfs.txt")).readlines()[:1779]]
     ticks = ["correctness", "data coverage", "relevance", "fluency", "text structure", "bert precision",
-             "bert recall", "bert F1", "bleurt", "bleu"]
+             "bert recall", "bert F1", "bleurt", "bleu", "ter"]
 
     if os.path.exists(SCORE_FILE):
         data_2020 = json.load(open(SCORE_FILE))
@@ -71,7 +72,7 @@ if __name__ == "__main__":
                 data_2020["bert F1"].append(all_auto_scores["bert_f1"][sample_id])
                 data_2020["bleurt"].append(all_bleurt_scores["bleurt"][sample_id])
                 data_2020["bleu"].append(all_auto_scores["bleu_nltk"][sample_id])
-            # data_2020["ter"].append(all_auto_scores["ter"][sample_id])
+                data_2020["ter"].append(all_auto_scores["ter"][sample_id])
 
     rdfs = open(os.path.join("raw_data", "unwrapped_rdfs.txt")).readlines()[:1779]
 
@@ -115,5 +116,41 @@ if __name__ == "__main__":
                     # our score
                     data_2020[model_name].append(float(all_sim_scores[sample_id]))
                 # automatic scores
+
+    if "questeval" not in data_2020.keys():
+        gem_rdfs = json.load(open("raw_data/gem_rdfs.json"))
+        from questeval.utils import LinearizeWebnlgInput
+        import spacy
+        try:
+            spacy_pipeline = spacy.load('en_core_web_sm')
+        except OSError:
+            from spacy.cli import download
+            download('en_core_web_sm')
+            spacy_pipeline = spacy.load('en_core_web_sm')
+
+        linearizer = LinearizeWebnlgInput(spacy_pipeline=spacy_pipeline)
+        questeval_rdfs = [linearizer(rdf) for rdf in gem_rdfs]
+
+        questeval = QuestEval()
+        questeval.task = "data2text"
+
+        data_2020["questeval"] = []
+        ticks.append("questeval")
+
+        for candidate_folder in tqdm(candidate_folders):
+            team = candidate_folder.split("/")[-1]
+            all_hypotheses = [item[:-1] for item in
+                              open(os.path.join(candidate_folder, "primary.en")).readlines()[:1779]]
+
+            quest_scores = questeval.corpus_questeval(
+                hypothesis=all_hypotheses,
+                sources=questeval_rdfs,
+            )["ex_level_scores"]
+
+            for item in human_scores_per_team[team]:
+                sample_id = int(item["sample_id"]) - 1
+                # our score
+                data_2020["questeval"].append(float(quest_scores[sample_id]))
+            # automatic scores
 
     json.dump(data_2020, open(SCORE_FILE, "w"), indent=2, ensure_ascii=False)
