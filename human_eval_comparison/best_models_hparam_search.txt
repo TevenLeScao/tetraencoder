@@ -1,0 +1,8 @@
+cross_all_bs192_hardneg/lr1e-05_bs8
+bi_all_bs192_hardneg/lr5e-06_bs8
+cross_all_bs160_allneg/lr2e-05_bs96
+bi_all_bs160_allneg/lr5e-05_bs32
+bi_all_bs320_vanilla/lr5e-06_bs8
+cross_all_bs320_vanilla/lr0.0001_bs96
+bi_all-mpnet-base-v2/lr5e-06_bs8
+cross_all-mpnet-base-v2/lr1e-05_bs8
