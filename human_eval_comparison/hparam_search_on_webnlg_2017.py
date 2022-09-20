@@ -2,15 +2,12 @@ import argparse
 import logging
 import math
 import os
-from datetime import datetime
-
 import random
 
+import datasets
 import numpy as np
 import torch
 import wandb
-
-import datasets
 from sentence_transformers import InputExample, LoggingHandler, SentenceTransformer, losses
 from torch import nn
 from torch.utils.data import DataLoader
@@ -54,63 +51,58 @@ def linearize_rdf(triples):
     return encoded_rdf
 
 
-def convert_2017_rdf(examples: dict, rdf_key: str = "mr"):
-    examples[rdf_key + "_processed"] = [linearize_rdf([triple.split(" | ") for triple in example.split("<br>")]) for
+def convert_2017_rdf(examples: dict, rdf_key: str = "mr", output_key="rdf"):
+    examples[output_key] = [linearize_rdf([triple.split(" | ") for triple in example.split("<br>")]) for
                                         example in examples[rdf_key]]
     return examples
 
 
-def train(config):
-    assert torch.cuda.is_available()
-    # Configure the training
-
-    data_2017 = datasets.load_dataset("teven/webnlg_2017_human_eval")["train"].filter(
-        lambda example: example['text'] is not None and len(example['text']) > 0).shuffle(seed=SEED)
-    data_2017 = data_2017.map(convert_2017_rdf, batched=True)
+def train(config, data, metric_to_fit):
 
     train_samples = []
     dev_samples = []
 
-    bounds = min(data_2017["semantic_adequacy"]), max(data_2017["semantic_adequacy"])
+    bounds = min(data[metric_to_fit]), max(data[metric_to_fit])
 
     def normalize_rating(score):
         return (score - bounds[0]) / (bounds[1] - bounds[0])
 
-    data_2017 = data_2017.map(
-        lambda example: {k: normalize_rating(v) if k == "semantic_adequacy" else v for k, v in example.items()})
+    data_2017 = data.map(
+        lambda example: {k: normalize_rating(v) if k == metric_to_fit else v for k, v in example.items()})
 
     train_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9)))
     dev_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9), len(data_2017)))
 
     for i, row in enumerate(train_dataset):
-        train_samples.append(InputExample(texts=[row['text'], row['mr_processed']],
-                                          label=row['semantic_adequacy']))
+        train_samples.append(InputExample(texts=[row['text'], row['rdf']],
+                                          label=row[metric_to_fit]))
 
     for i, row in enumerate(dev_dataset):
-        dev_samples.append(InputExample(texts=[row['text'], row['mr_processed']],
-                                        label=row['semantic_adequacy']))
+        dev_samples.append(InputExample(texts=[row['text'], row['rdf']],
+                                        label=row[metric_to_fit]))
 
     # We wrap train_samples (which is a List[InputExample]) into a pytorch DataLoader
     train_dataloader = DataLoader(train_samples, shuffle=True, batch_size=config["train_batch_size_per_gpu"])
 
     # We add an evaluator, which evaluates the performance during training
-    evaluator = PearsonCorrelationEvaluator.from_input_examples(dev_samples, name='sem_adequacy_dev')
+    evaluator = PearsonCorrelationEvaluator.from_input_examples(dev_samples, name=f"{metric_to_fit}_dev")
 
     warmup_steps = math.ceil(len(train_dataloader) * NUM_EPOCHS * 0.1)  # 10% of train data for warm-up
     # Train the model
     run = wandb.init(project="rdf-crossencoder", entity="flukeellington",
-                     name=f"{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}_lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}",
+                     name=f"{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}_lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}_{2020 if args.challenge_2020 else 2017}",
                      reinit=True,
                      config={
                          "learning_rate": config["lr"],
                          "epochs": NUM_EPOCHS,
                          "batch_size": config["train_batch_size_per_gpu"],
                          "biencoder": config["biencoder"],
-                         "base_model": config["model_name_or_path"]
+                         "base_model": config["model_name_or_path"],
+                         "year": 2020 if args.challenge_2020 else 2017
                      })
 
     if config["biencoder"]:
-        model = SentenceTransformer(config["model_name_or_path"])
+        model = SentenceTransformer(config["model_name_or_path"], use_auth_token=True)
         train_loss = losses.CosineSimilarityLoss(model=model)
 
         def train_callback(score, epoch, steps):
@@ -163,7 +155,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name_or_path", default="sentence-transformers/all-mpnet-base-v2",
                         type=str)  # "../outputs/small_bs_runs_allneg/all_bs160_allneg" "../outputs/small_bs_runs/all_datasets_bs320-2022-01-11_02-41-31"
+    parser.add_argument("--challenge_2020", action="store_true")
+    parser.add_argument("--metric", type=str, default="semantic_adequacy")
     parser.add_argument("--biencoder", action="store_true")
+    parser.add_argument("--sanity", action="store_true")
     args = parser.parse_args()
 
     torch.manual_seed(SEED)
@@ -173,13 +168,27 @@ if __name__ == "__main__":
     search_space = {"lr": [1e-6, 2e-6, 5e-6, 1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3],
                     "train_batch_size_per_gpu": [8, 16, 32, 64, 96]}
 
+    if args.challenge_2020:
+        data = datasets.load_dataset("teven/webnlg_2020_human_eval")["train"].shuffle(seed=SEED)
+    else:
+        data = datasets.load_dataset("teven/webnlg_2017_human_eval")["train"].filter(
+            lambda example: example['text'] is not None and len(example['text']) > 0).shuffle(seed=SEED)
+        data = data.map(convert_2017_rdf, batched=True)
+
     for lr in search_space["lr"]:
         for batch_size in search_space["train_batch_size_per_gpu"]:
             config = {"model_name_or_path": args.model_name_or_path, "lr": lr, "train_batch_size_per_gpu": batch_size,
                       "biencoder": args.biencoder}
-            config[
-                "output_path"] = f"hyperparam_search/{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}/lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}"
+            config["output_path"] = f"hyperparam_search/{2020 if args.challenge_2020 else 2017}/{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}/lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}"
             if os.path.isdir(os.path.join(config["output_path"], "best_model")):
                 print(f"-----------------\nSKIPPING run already found at {config['output_path']}\n-----------------")
                 continue
-            train(config)
+            try:
+                train(config, data=data, metric_to_fit=args.metric)
+            except RuntimeError:
+                pass
+
+            if args.sanity:
+                break
+        if args.sanity:
+            break
