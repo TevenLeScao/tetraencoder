@@ -75,6 +75,14 @@ def estimate_biencoder(name):
     return None
 
 
+def eatimate_year(name):
+    if "2017" in name:
+        return 2017
+    elif "2020" in name:
+        return 2020
+    return None
+
+
 if __name__ == "__main__":
 
     random.seed(0)
@@ -154,7 +162,8 @@ if __name__ == "__main__":
                        "max_seq_length": args.max_seq_length,
                        "finetuned": "finetuned" in paths[0],
                        "base_model": estimate_base_model(paths[0]),
-                       "biencoder": estimate_biencoder(paths[0])
+                       "biencoder": estimate_biencoder(paths[0]),
+                       "year": eatimate_year(paths[0])
                    })
 
     for path in tqdm(paths):
