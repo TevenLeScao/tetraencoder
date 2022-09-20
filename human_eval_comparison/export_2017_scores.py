@@ -126,7 +126,12 @@ if __name__ == "__main__":
     except (ImportError, ModuleNotFoundError):
         pass
 
-    hparam_search_results = open("best_models_hparam_search.txt").readlines()
+    base_models = [
+        "all-mpnet-base-v2",
+        "all_bs160_allneg",
+        "all_bs320_vanilla",
+        "all_bs192_hardneg",
+    ]
     models = OrderedDict(
         [
             ("all_bs160_allneg", SentenceTransformer(
@@ -136,13 +141,9 @@ if __name__ == "__main__":
             ("cross_all_bs160_allneg", CrossEncoder(
                 "output/allneg_good_outlier"))
         ] + [
-            (f"finetuned_{path.split('/')[0]}", CrossEncoder(
-                f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
-            "cross_" in path
+            (f"bi_{name}", SentenceTransformer(f"teven/bi_{name}_finetuned_WebNLG2020")) for name in base_models
         ] + [
-            (f"finetuned_{path.split('/')[0]}", SentenceTransformer(
-                f"search_results/{path[:-1]}/best_model")) for path in hparam_search_results if
-            "bi_" in path
+            (f"cross_{name}", CrossEncoder(f"teven/cross_{name}_finetuned_WebNLG2020")) for name in base_models
         ]
     )
 
