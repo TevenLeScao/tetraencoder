@@ -19,7 +19,7 @@ from util import nullcontext
 datasets.logging.set_verbosity_error()
 
 
-def build_evaluators(args):    # Create evaluators
+def build_evaluators(args):  # Create evaluators
     evaluators = []
     task_names = []
     if args.eval_webnlg_wikidata_file is not None:
@@ -78,8 +78,8 @@ def build_evaluators(args):    # Create evaluators
             relevant_docs = {match: {i} for i, match in enumerate(passages["mpww_match"]) if match is not None}
             evaluators.append(
                 MatmulIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False, precision_recall_at_k=[10],
-                                 accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
-                                 score_function='cos_sim', index_training_samples=args.index_training_samples))
+                                  accuracy_at_k=[1], batch_size=args.eval_batch_size_per_gpu,
+                                  score_function='cos_sim', index_training_samples=args.index_training_samples))
             # evaluators.append(
             #     FaissIREvaluator(queries, corpus, relevant_docs, show_progress_bar=False,
             #                      corpus_chunk_size=args.eval_corpus_chunk_size, precision_recall_at_k=[10],
@@ -188,7 +188,8 @@ if __name__ == "__main__":
         # for training
         input_filepath = vars(args)[f"{dataset_name}_file"]
         print(f"adding {dataset_name} to the corpus")
-        dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath, map_num_proc=args.map_num_proc_override)
+        dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath,
+                                                                   map_num_proc=args.map_num_proc_override)
         if args.similarity_fraction_to_keep is not None:
             dataloaders[dataset_name].filter_by_similarity(args.similarity_fraction_to_keep)
         if args.replaced_negatives:
@@ -212,8 +213,7 @@ if __name__ == "__main__":
 
         import wandb
 
-        wandb.init(project="rdf-embeddings", entity="flukeellington", name=name)
-        wandb.config = {
+        wandb.init(project="rdf-embeddings", entity="flukeellington", name=name, config={
             "model_name_or_path": args.model_name_or_path,
             "epochs": args.num_epochs,
             "learning_rate": args.lr,
@@ -221,7 +221,7 @@ if __name__ == "__main__":
             "batch_size": args.train_batch_size_per_gpu * torch.cuda.device_count(),
             "max_seq_length": args.max_seq_length,
             "train_datasets": train_datasets
-        }
+        })
 
 
         def train_callback(score, epoch, steps):

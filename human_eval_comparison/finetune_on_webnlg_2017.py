@@ -92,9 +92,14 @@ if __name__ == "__main__":
     dev_samples = []
 
     bounds = min(data_2017["semantic_adequacy"]), max(data_2017["semantic_adequacy"])
+
+
     def normalize_rating(score):
         return (score - bounds[0]) / (bounds[1] - bounds[0])
-    data_2017 = data_2017.map(lambda example: {k: normalize_rating(v) if k == "semantic_adequacy" else v for k, v in example.items()})
+
+
+    data_2017 = data_2017.map(
+        lambda example: {k: normalize_rating(v) if k == "semantic_adequacy" else v for k, v in example.items()})
 
     train_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9)))
     dev_dataset = data_2017.select(range(math.floor(len(data_2017) * 0.9), len(data_2017)))
@@ -117,49 +122,55 @@ if __name__ == "__main__":
     warmup_steps = math.ceil(len(train_dataloader) * args.num_epochs * 0.1)  # 10% of train data for warm-up
 
     if args.wandb:
-        wandb.init(project="rdf-crossencoder", entity="flukeellington", name=args.run_name)
-        wandb.config = {
+        wandb.init(project="rdf-crossencoder", entity="flukeellington", name=args.run_name, config={
             "learning_rate": args.lr,
             "epochs": args.num_epochs,
             "batch_size": args.train_batch_size_per_gpu,
         }
+        )
 
-    # Train the model
-    if args.biencoder:
-        model = SentenceTransformer(args.model_name_or_path)
-        train_loss = losses.CosineSimilarityLoss(model=model)
-        def train_callback(score, epoch, steps):
-            wandb.log({"bi_encoder_loss": score.item(), "step": steps, "data_points": steps * train_dataloader.batch_size})
+        # Train the model
+        if args.biencoder:
+            model = SentenceTransformer(args.model_name_or_path)
+            train_loss = losses.CosineSimilarityLoss(model=model)
 
-        def eval_callback(score, epoch, steps):
-            wandb.log({"correlation": score, "epoch": epoch, "step": steps, "data_points": steps * train_dataloader.batch_size})
 
-        model.fit(train_objectives=[(train_dataloader, train_loss)],
-                  evaluator=evaluator,
-                  epochs=args.num_epochs,
-                  warmup_steps=warmup_steps,
-                  scheduler=args.scheduler,
-                  output_path=model_save_path,
-                  optimizer_params={"lr": args.lr},
-                  train_callback=train_callback,
-                  eval_callback=eval_callback,
-                  logging_steps=1,
-                  full_scores_callbacks=False)
-    else:
-        model = BetterCrossEncoder(args.model_name_or_path, num_labels=1)
-        model.fit(train_dataloader=train_dataloader,
-                  evaluator=evaluator,
-                  epochs=args.num_epochs,
-                  early_stopping=args.early_stopping,
-                  warmup_steps=warmup_steps,
-                  scheduler=args.scheduler,
-                  output_path=model_save_path,
-                  optimizer_params={"lr": args.lr},
-                  evaluation_steps=len(train_dataloader),
-                  activation_fct=nn.Sigmoid(),
-                  loss_fct=nn.SmoothL1Loss(),
-                  log_wandb=args.wandb)
+            def train_callback(score, epoch, steps):
+                wandb.log({"bi_encoder_loss": score.item(), "step": steps,
+                           "data_points": steps * train_dataloader.batch_size})
 
-    ##### Load model and eval on test set
-    model = BetterCrossEncoder(model_save_path)
-    evaluator(model)
+
+            def eval_callback(score, epoch, steps):
+                wandb.log({"correlation": score, "epoch": epoch, "step": steps,
+                           "data_points": steps * train_dataloader.batch_size})
+
+
+            model.fit(train_objectives=[(train_dataloader, train_loss)],
+                      evaluator=evaluator,
+                      epochs=args.num_epochs,
+                      warmup_steps=warmup_steps,
+                      scheduler=args.scheduler,
+                      output_path=model_save_path,
+                      optimizer_params={"lr": args.lr},
+                      train_callback=train_callback,
+                      eval_callback=eval_callback,
+                      logging_steps=1,
+                      full_scores_callbacks=False)
+        else:
+            model = BetterCrossEncoder(args.model_name_or_path, num_labels=1)
+            model.fit(train_dataloader=train_dataloader,
+                      evaluator=evaluator,
+                      epochs=args.num_epochs,
+                      early_stopping=args.early_stopping,
+                      warmup_steps=warmup_steps,
+                      scheduler=args.scheduler,
+                      output_path=model_save_path,
+                      optimizer_params={"lr": args.lr},
+                      evaluation_steps=len(train_dataloader),
+                      activation_fct=nn.Sigmoid(),
+                      loss_fct=nn.SmoothL1Loss(),
+                      log_wandb=args.wandb)
+
+        ##### Load model and eval on test set
+        model = BetterCrossEncoder(model_save_path)
+        evaluator(model)
