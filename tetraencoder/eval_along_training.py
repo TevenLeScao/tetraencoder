@@ -2,11 +2,13 @@ import argparse
 import glob
 import os.path
 import random
+from operator import xor
 
 import torch
+
 torch.multiprocessing.set_sharing_strategy('file_system')
 from accelerate import Accelerator
-from datasets import tqdm
+from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 
 from dataset_wrappers import *
@@ -24,7 +26,10 @@ def evaluate(model_path, sequential_evaluator, task_names, batch_size, wandb_log
         model = model.half()
 
     # reloading an existing model
-    training_step = int(model_path.split("/")[-1])
+    try:
+        training_step = int(model_path.split("/")[-1])
+    except ValueError:
+        training_step = -1
     seen_items = batch_size * training_step
     eval_path = os.path.join(model_path, "eval_out_of_training")
     os.makedirs(eval_path, exist_ok=True)
@@ -55,6 +60,21 @@ def evaluate(model_path, sequential_evaluator, task_names, batch_size, wandb_log
                 wandb.log({f"{task_name}_MRR@10": scores[i]["mrr@10_src2tgt"], "data_points": seen_items})
 
 
+def estimate_base_model(name):
+    for model_name in ["all-mpnet-base-v2", "all_bs160_allneg", "all_bs320_vanilla", "all_bs192_hardneg"]:
+        if model_name in name:
+            return model_name
+    return None
+
+
+def estimate_biencoder(name):
+    if "cross_" in name:
+        return False
+    elif "bi_" in name:
+        return True
+    return None
+
+
 if __name__ == "__main__":
 
     random.seed(0)
@@ -66,7 +86,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_seq_length", default=512, type=int)
     parser.add_argument("--fp16", action="store_true")
     # i/o args
-    parser.add_argument("--checkpoints_folder", default=None, required=True, type=str)
+    parser.add_argument("--model_name_or_path", default=None, required=False, type=str)
+    parser.add_argument("--checkpoints_folder", default=None, required=False, type=str)
     parser.add_argument("--only_last_checkpoint", action="store_true")
     # dataset args
     for dataset_name in dataset_builders:
@@ -92,7 +113,6 @@ if __name__ == "__main__":
     # wrap-up
     args = parser.parse_args()
     print(args)
-    assert os.path.isdir(args.checkpoints_folder)
 
     if args.accelerate:
         accelerator = Accelerator()
@@ -112,21 +132,31 @@ if __name__ == "__main__":
         batch_size = 0
         neg_type = None
 
+    if args.checkpoints_folder is not None:
+        assert os.path.isdir(args.checkpoints_folder)
+        assert args.model_name_or_path is None, "Can't pass both model_name_or_path and checkpoints_folder"
+        paths = glob.glob(args.checkpoints_folder + "/[0-9]*")
+        paths = sorted(paths, key=lambda folder: int(folder.split("/")[-1]))
+        if args.only_last_checkpoint:
+            paths = paths[-1:]
+    else:
+        assert args.model_name_or_path is not None, "Must pass both model_name_or_path or checkpoints_folder"
+        paths = [args.model_name_or_path]
+
     if args.wandb and is_main_process:
         import wandb
-        wandb.init(project="rdf-embeddings-evals-paper", entity="flukeellington", name=args.run_name)
-        wandb.config = {
-            "batch_size": batch_size,
-            "train_datasets": train_datasets,
-            "negatives": neg_type,
-            "max_seq_length": args.max_seq_length,
-        }
 
-    subfolders = glob.glob(args.checkpoints_folder + "/[0-9]*")
-    subfolders = sorted(subfolders, key=lambda folder: int(folder.split("/")[-1]))
-    if args.only_last_checkpoint:
-        subfolders = subfolders[-1:]
+        wandb.init(project="rdf-embeddings-evals-paper", entity="flukeellington", name=args.run_name,
+                   config={
+                       "batch_size": batch_size,
+                       "train_datasets": train_datasets,
+                       "negatives": neg_type,
+                       "max_seq_length": args.max_seq_length,
+                       "finetuned": "finetuned" in paths[0],
+                       "base_model": estimate_base_model(paths[0]),
+                       "biencoder": estimate_biencoder(paths[0])
+                   })
 
-    for subfolder in tqdm(subfolders):
-        evaluate(subfolder, sequential_evaluator, task_names, batch_size, wandb_log=args.wandb,
+    for path in tqdm(paths):
+        evaluate(path, sequential_evaluator, task_names, batch_size, wandb_log=args.wandb,
                  max_seq_length=args.max_seq_length, is_main_process=is_main_process, fp16=args.fp16)
