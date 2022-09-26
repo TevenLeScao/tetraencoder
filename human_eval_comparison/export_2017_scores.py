@@ -7,7 +7,7 @@ import datasets
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from export_2020_scores import cross_sims, pair_sims, quest_sims
 
-SCORE_FILE = "2017_scores.json"
+SCORE_FILE = "2017_scores.jsonl"
 Q_TOKEN = "[Q]"
 S_TOKEN = "[S]"
 P_TOKEN = "[P]"
@@ -132,18 +132,22 @@ if __name__ == "__main__":
         "all_bs320_vanilla",
         "all_bs192_hardneg",
     ]
+    metrics =[
+        "correctness",
+        "data_coverage",
+        "relevance",
+        "metric_average",
+    ]
     models = OrderedDict(
         [
             ("all_bs160_allneg", SentenceTransformer(
                 "teven/all_bs160_allneg")),
             ("all_bs192_hardneg", SentenceTransformer(
-                "teven/all_bs192_hardneg")),
-            ("cross_all_bs160_allneg", CrossEncoder(
-                "output/allneg_good_outlier"))
+                "teven/all_bs192_hardneg"))
         ] + [
-            (f"bi_{name}", SentenceTransformer(f"teven/bi_{name}_finetuned_WebNLG2020")) for name in base_models
+            (f"bi_{name}_{metric}", SentenceTransformer(f"teven/bi_{name}_finetuned_WebNLG2020_{metric}")) for name in base_models for metric in metrics
         ] + [
-            (f"cross_{name}", CrossEncoder(f"teven/cross_{name}_finetuned_WebNLG2020")) for name in base_models
+            (f"cross_{name}_{metric}", CrossEncoder(f"teven/cross_{name}_finetuned_WebNLG2020_{metric}")) for name in base_models for metric in metrics
         ]
     )
 

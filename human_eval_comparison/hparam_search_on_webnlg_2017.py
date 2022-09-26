@@ -90,7 +90,7 @@ def train(config, data, metric_to_fit):
     warmup_steps = math.ceil(len(train_dataloader) * NUM_EPOCHS * 0.1)  # 10% of train data for warm-up
     # Train the model
     run = wandb.init(project="rdf-crossencoder", entity="flukeellington",
-                     name=f"{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}_lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}_{2020 if args.challenge_2020 else 2017}",
+                     name=f"{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}_lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}_{f'2020_{metric_to_fit}' if args.challenge_2020 else 2017}",
                      reinit=True,
                      config={
                          "learning_rate": config["lr"],
@@ -98,7 +98,8 @@ def train(config, data, metric_to_fit):
                          "batch_size": config["train_batch_size_per_gpu"],
                          "biencoder": config["biencoder"],
                          "base_model": config["model_name_or_path"],
-                         "year": 2020 if args.challenge_2020 else 2017
+                         "year": 2020 if args.challenge_2020 else 2017,
+                         "metric": metric_to_fit
                      })
 
     if config["biencoder"]:
@@ -170,6 +171,9 @@ if __name__ == "__main__":
 
     if args.challenge_2020:
         data = datasets.load_dataset("teven/webnlg_2020_human_eval")["train"].shuffle(seed=SEED)
+        data = data.rename_column("data coverage", "data_coverage")
+        data = data.add_column("metric_average", (np.array(data["correctness"]) + np.array(data["data_coverage"]) + np.array(data["relevance"])) / 3)
+
     else:
         data = datasets.load_dataset("teven/webnlg_2017_human_eval")["train"].filter(
             lambda example: example['text'] is not None and len(example['text']) > 0).shuffle(seed=SEED)
@@ -178,8 +182,8 @@ if __name__ == "__main__":
     for lr in search_space["lr"]:
         for batch_size in search_space["train_batch_size_per_gpu"]:
             config = {"model_name_or_path": args.model_name_or_path, "lr": lr, "train_batch_size_per_gpu": batch_size,
-                      "biencoder": args.biencoder}
-            config["output_path"] = f"hyperparam_search/{2020 if args.challenge_2020 else 2017}/{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}/lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}"
+                      "biencoder": args.biencoder, "metric": args.metric}
+            config["output_path"] = f"hyperparam_search/{f'2020_{args.metric}' if args.challenge_2020 else 2017}/{'bi' if config['biencoder'] else 'cross'}_{config['model_name_or_path'].split('/')[-1]}/lr{config['lr']:.3}_bs{config['train_batch_size_per_gpu']}"
             if os.path.isdir(os.path.join(config["output_path"], "best_model")):
                 print(f"-----------------\nSKIPPING run already found at {config['output_path']}\n-----------------")
                 continue
