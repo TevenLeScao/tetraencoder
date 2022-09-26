@@ -188,12 +188,12 @@ class InputExampleDataset:
         cutoff_value = np.partition(similarities, -cutoff_index)[-cutoff_index]
         self.filter(lambda x: x[similarity_key] >= cutoff_value)
 
-    def setup_for_training(self, seed=1951):
+    def setup_for_training(self, seed=1951, rdf_key="triples"):
         self.shuffle(seed=seed)
-        self.map(partial(batch_mix_triples, rdf_key="triples"), batched=True, num_proc=self.map_num_proc,
+        self.map(partial(batch_mix_triples, rdf_key=rdf_key), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
-        self.map(partial(invert_one_triple, rdf_key="triples"), num_proc=self.map_num_proc)
-        self.map(partial(invert_all_triples, rdf_key="triples"), num_proc=self.map_num_proc)
+        self.map(partial(invert_one_triple, rdf_key=rdf_key), num_proc=self.map_num_proc)
+        self.map(partial(invert_all_triples, rdf_key=rdf_key), num_proc=self.map_num_proc)
 
 
 class MsMarcoDataset(InputExampleDataset):
@@ -210,12 +210,13 @@ class MsMarcoDataset(InputExampleDataset):
 
 
 class KelmDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, seed=1951, setup_for_training=True, **kwargs):
         super().__init__(previous_text_key="gen_sentence", **kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
+        if setup_for_training:
+            self.setup_for_training(seed)
         self.uniformize_text_key()
 
     def __len__(self):
@@ -248,12 +249,13 @@ class GooAqDataset(InputExampleDataset):
 
 
 class TekgenDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, seed=1951, setup_for_training=True, **kwargs):
         super().__init__(previous_text_key="sentence", **kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
+        if setup_for_training:
+            self.setup_for_training(seed)
         self.uniformize_text_key()
 
     def __len__(self):
@@ -267,12 +269,13 @@ class TekgenDataset(InputExampleDataset):
 
 
 class WebNlgDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, seed=1951, setup_for_training=True, **kwargs):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
+        if setup_for_training:
+            self.setup_for_training(seed)
 
     def __len__(self):
         return len(self.dataset)
@@ -336,15 +339,16 @@ class SQDataset(InputExampleDataset):
 
 
 class GenWikiDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, seed=1951, setup_for_training=True, **kwargs):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(GenWikiDataset.batched_fill_in_entities, batched=True, num_proc=self.map_num_proc)
         self.rename_column("text", "unfilled_text")
         self.rename_column("filled_text", "text")
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
+        self.map(partial(batch_linearize_rdf, rdf_key="graph"), batched=True, num_proc=self.map_num_proc)
+        if setup_for_training:
+            self.setup_for_training(seed, rdf_key="graph")
 
     def __len__(self):
         return len(self.dataset)
@@ -369,12 +373,13 @@ class GenWikiDataset(InputExampleDataset):
 
 
 class TRexDataset(InputExampleDataset):
-    def __init__(self, data_file, seed=1951, **kwargs):
+    def __init__(self, data_file, seed=1951, setup_for_training=True, **kwargs):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
         self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
-        self.setup_for_training(seed)
+        if setup_for_training:
+            self.setup_for_training(seed)
 
     def __len__(self):
         return len(self.dataset)

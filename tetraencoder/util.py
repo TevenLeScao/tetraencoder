@@ -27,6 +27,7 @@ def pair_sims_datasets_map(examples: dict, rank: int = 0, model: SentenceTransfo
         examples[similarity_key] = cos_sims
 
     elif isinstance(model, CrossEncoder):
+        model._target_device = device
         predictions = model.predict(list(zip(examples[text_key], examples[rdf_key])), batch_size=batch_size)
         examples[similarity_key] = predictions
 
