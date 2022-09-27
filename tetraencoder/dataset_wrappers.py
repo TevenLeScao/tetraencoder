@@ -63,6 +63,25 @@ def batch_linearize_rdf(examples, rdf_key="triples", output_key="rdf_linearized"
     return examples
 
 
+def split(delimiters, string, maxsplit=0):
+    import re
+    regex_pattern = '|'.join(map(re.escape, delimiters))
+    return re.split(regex_pattern, string, maxsplit)
+
+
+def nest_rdf(linearized_rdf: str):
+    string_triples = linearized_rdf.split("[S]")[1:]
+    # print(string_triples)
+    triples = [split(["[P]", "[O]"], string_triple) for string_triple in string_triples]
+    # print(triples)
+    return triples
+
+
+def batch_nest_rdf(examples, linear_key="rdf_linearized", triples_key="triples"):
+    examples[triples_key] = [nest_rdf(rdf) for rdf in examples[linear_key]]
+    return examples
+
+
 # unitary example function for `batch_mix_triples`
 def replace_random_triples(triples, replacements: Tuple[List, List, List], max_tries=1000):
     encoded_rdf = ""
@@ -188,7 +207,16 @@ class InputExampleDataset:
         cutoff_value = np.partition(similarities, -cutoff_index)[-cutoff_index]
         self.filter(lambda x: x[similarity_key] >= cutoff_value)
 
-    def setup_for_training(self, seed=1951, rdf_key="triples"):
+    def setup_for_training(self, seed=1951, rdf_key="triples", linear_key="rdf_linearized"):
+
+        if rdf_key not in self.dataset.column_names:
+            assert linear_key in self.dataset.column_names, f"{linear_key} not in dataset columns {self.dataset.column_names}"
+            self.map(partial(batch_nest_rdf, triples_key=rdf_key, linear_key=linear_key), num_proc=self.map_num_proc, batched=True)
+
+        if linear_key not in self.dataset.column_names:
+            assert rdf_key in self.dataset.column_names, f"{rdf_key} not in dataset columns {self.dataset.column_names}"
+            self.map(partial(batch_linearize_rdf, rdf_key=rdf_key, output_key=linear_key), batched=True, num_proc=self.map_num_proc)
+
         self.shuffle(seed=seed)
         self.map(partial(batch_mix_triples, rdf_key=rdf_key), batched=True, num_proc=self.map_num_proc,
                  batch_size=CORRUPTION_BATCH_SIZE)
@@ -214,7 +242,6 @@ class KelmDataset(InputExampleDataset):
         super().__init__(previous_text_key="gen_sentence", **kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
         if setup_for_training:
             self.setup_for_training(seed)
         self.uniformize_text_key()
@@ -253,7 +280,6 @@ class TekgenDataset(InputExampleDataset):
         super().__init__(previous_text_key="sentence", **kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(batch_linearize_rdf, batched=True, num_proc=self.map_num_proc)
         if setup_for_training:
             self.setup_for_training(seed)
         self.uniformize_text_key()
@@ -273,7 +299,6 @@ class WebNlgDataset(InputExampleDataset):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         if setup_for_training:
             self.setup_for_training(seed)
 
@@ -346,7 +371,6 @@ class GenWikiDataset(InputExampleDataset):
         self.map(GenWikiDataset.batched_fill_in_entities, batched=True, num_proc=self.map_num_proc)
         self.rename_column("text", "unfilled_text")
         self.rename_column("filled_text", "text")
-        self.map(partial(batch_linearize_rdf, rdf_key="graph"), batched=True, num_proc=self.map_num_proc)
         if setup_for_training:
             self.setup_for_training(seed, rdf_key="graph")
 
@@ -377,7 +401,6 @@ class TRexDataset(InputExampleDataset):
         super().__init__(**kwargs)
         self.data_file = data_file
         self.dataset = datasets.load_dataset("json", data_files=data_file)["train"]
-        self.map(partial(batch_linearize_rdf, rdf_key="triples"), batched=True, num_proc=self.map_num_proc)
         if setup_for_training:
             self.setup_for_training(seed)
 

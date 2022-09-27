@@ -126,6 +126,7 @@ if __name__ == "__main__":
     for dataset_name in dataset_builders:
         parser.add_argument(f"--{dataset_name}_file", default=None, type=str)
     parser.add_argument("--similarity_fraction_to_keep", default=None, type=float)
+    parser.add_argument("--similarity_key", default=None, type=str)
     parser.add_argument("--map_num_proc_override", default=None, type=float)
     # evaluation dataset args
     parser.add_argument("--eval_webnlg_wikidata_file", default=None, type=str)
@@ -191,7 +192,7 @@ if __name__ == "__main__":
         dataloaders[dataset_name] = dataset_builders[dataset_name](input_filepath,
                                                                    map_num_proc=args.map_num_proc_override)
         if args.similarity_fraction_to_keep is not None:
-            dataloaders[dataset_name].filter_by_similarity(args.similarity_fraction_to_keep)
+            dataloaders[dataset_name].filter_by_similarity(args.similarity_fraction_to_keep, similarity_key=args.similarity_key)
         if args.replaced_negatives:
             dataloaders[dataset_name].corruption.append("mix")
         if args.inverted_negatives:
@@ -212,7 +213,6 @@ if __name__ == "__main__":
     if args.wandb and accelerator.is_main_process:
 
         import wandb
-
         wandb.init(project="rdf-embeddings", entity="flukeellington", name=name, config={
             "model_name_or_path": args.model_name_or_path,
             "epochs": args.num_epochs,
